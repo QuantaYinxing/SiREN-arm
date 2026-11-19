@@ -1,0 +1,628 @@
+openapi: 3.1.0
+info:
+  title: SiREN API
+  version: 0.1.0
+  description: >
+    One backend serving both PWAs (/ops, /field). Wire format snake_case. Enum values
+    come from contracts/config.yaml; UI labels are Indonesian. Positions are {lat,lon}.
+    WebSocket contract: contracts/events.md and contracts/events.json.
+servers:
+  - url: https://siren.id
+  - url: http://127.0.0.1:8000
+
+tags:
+  - name: auth
+  - name: master
+  - name: incidents
+  - name: dispatch
+  - name: routing
+  - name: water
+  - name: restrictions
+  - name: reporter
+  - name: stats
+  - name: live
+
+paths:
+  /snapshot:
+    get:
+      tags: [live]
+      summary: Full state snapshot for a fresh client or a reconnect that missed events
+      responses:
+        "200": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Snapshot"}}}}
+
+  /auth/login:
+    post:
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties: {username: {type: string}, password: {type: string}}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: {type: string}
+                  refresh_token: {type: string}
+                  role: {type: string, enum: [operator, officer]}
+                  member_id: {type: [string, "null"]}
+        "401": {"$ref": "#/components/responses/Error"}
+  /auth/refresh:
+    post:
+      tags: [auth]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [refresh_token], properties: {refresh_token: {type: string}}}}}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: {type: object, properties: {token: {type: string}, refresh_token: {type: string}}}
+        "401": {"$ref": "#/components/responses/Error"}
+
+  /config/{key}:
+    get:
+      tags: [master]
+      summary: One config value (e.g. position.stale_after_seconds)
+      parameters: [{name: key, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {content: {application/json: {schema: {type: object, properties: {key: {type: string}, value: {}}}}}}
+        "404": {"$ref": "#/components/responses/Error"}
+    put:
+      tags: [master]
+      summary: Change a config value (operator only) — emits config.updated
+      parameters: [{name: key, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [value], properties: {value: {}}}}}
+      responses:
+        "200": {content: {application/json: {schema: {type: object, properties: {key: {type: string}, value: {}}}}}}
+        "403": {"$ref": "#/components/responses/Error"}
+
+  /config:
+    get:
+      tags: [master]
+      summary: Whole config (enums + thresholds) as in contracts/config.yaml
+      responses:
+        "200": {content: {application/json: {schema: {type: object}}}}
+
+  /teams:
+    get: {tags: [master], responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/Team"}}}}}}}
+    post:
+      tags: [master]
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/Team"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Team"}}}}}
+
+  /members:
+    get:
+      tags: [master]
+      parameters: [{name: team_id, in: query, schema: {type: string}}]
+      responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/Member"}}}}}}
+    post:
+      tags: [master]
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/Member"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Member"}}}}}
+
+  /members/{id}:
+    get: {tags: [master], parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Member"}}}}, "404": {"$ref": "#/components/responses/Error"}}}
+    patch:
+      tags: [master]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of Member fields"}}}}
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Member"}}}}}
+
+  /vehicle-profiles:
+    get: {tags: [master], responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/VehicleProfile"}}}}}}}
+    post:
+      tags: [master]
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/VehicleProfile"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/VehicleProfile"}}}}}
+
+  /vehicles:
+    get: {tags: [master], responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/Vehicle"}}}}}}}
+    post:
+      tags: [master]
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}}
+
+  /vehicles/{id}:
+    get:
+      tags: [master]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}, "404": {"$ref": "#/components/responses/Error"}}
+    patch:
+      tags: [master]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of Vehicle fields"}}}}
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}}
+
+  /vehicles/{id}/water-level:
+    post:
+      tags: [water]
+      summary: Manual water reading by operator or officer (D7). Stored as water_level_reading.
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level, source]
+              properties:
+                level: {type: integer, minimum: 0, maximum: 4}
+                source: {type: string, enum: [operator, officer]}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}
+        "400": {"$ref": "#/components/responses/Error"}
+
+  /vehicles/{id}/refill-done:
+    post:
+      tags: [water]
+      summary: Refill finished — resets level to full (4) after confirmation
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {content: {application/json: {schema: {type: object, properties: {confirmed: {type: boolean, default: true}}}}}}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}
+        "409": {"$ref": "#/components/responses/Error"}
+
+  /water-sources:
+    get:
+      tags: [master]
+      parameters: [{name: status, in: query, schema: {type: string, enum: [active, dry, broken, inactive, all], default: all}}]
+      responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/WaterSource"}}}}}}
+    post:
+      tags: [master]
+      summary: Add a water source without redeploying (D6)
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/WaterSource"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/WaterSource"}}}}}
+
+  /water-sources/{id}:
+    get: {tags: [master], parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/WaterSource"}}}}, "404": {"$ref": "#/components/responses/Error"}}}
+    patch:
+      tags: [master]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of WaterSource fields"}}}}
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/WaterSource"}}}}}
+    delete:
+      tags: [master]
+      summary: Disable/remove a source (soft delete, status becomes inactive)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/WaterSource"}}}}}
+
+  /incidents:
+    get:
+      tags: [incidents]
+      parameters: [{name: status, in: query, schema: {type: string, description: "active = anything not Selesai/Dibatalkan", enum: [active, all, Baru, Dispatched, EnRoute, OnScene, Returning, Selesai, Dibatalkan]}}]
+      responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/Incident"}}}}}}
+    post:
+      tags: [incidents]
+      summary: Create an incident (operator typed address, picked point, or reporter link already received)
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/IncidentCreate"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Incident"}}}}}
+
+  /incidents/{id}:
+    get: {tags: [incidents], parameters: [{name: id, in: path, required: true, schema: {type: string}}], responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Incident"}}}}, "404": {"$ref": "#/components/responses/Error"}}}
+    patch:
+      tags: [incidents]
+      summary: Edit fields or move status; status changes must satisfy config.transitions.incident
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of Incident fields, incl. status"}}}}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Incident"}}}}
+        "409": {description: "status transition not allowed"}
+
+  /incidents/{id}/assignments:
+    post:
+      tags: [dispatch]
+      summary: Custom per-member dispatch (D9) — one assignment row per member
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [members]
+              properties:
+                members: {type: array, items: {type: string}, minItems: 1}
+                vehicle_id: {type: [string, "null"]}
+                water_source_id: {type: [string, "null"]}
+                roles: {type: [object, "null"], description: "member_id -> role override"}
+      responses:
+        "201": {content: {application/json: {schema: {type: object, properties: {incident: {"$ref": "#/components/schemas/Incident"}, assignments: {type: array, items: {"$ref": "#/components/schemas/Assignment"}}, warnings: {type: array, items: {type: string}}}}}}}
+        "400": {"$ref": "#/components/responses/Error"}
+
+  /assignments/{id}:
+    patch:
+      tags: [dispatch]
+      summary: Re-point one member (change vehicle / water source / role / status)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of Assignment fields"}}}}
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Assignment"}}}}}
+    delete:
+      tags: [dispatch]
+      summary: Withdraw an assignment; member goes back to Standby
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Assignment"}}}}}
+
+  /routing/route:
+    post:
+      tags: [routing]
+      summary: >
+        Route for a vehicle. Vehicle profile comes from the assigned vehicle (D4), never
+        chosen by the user. Verified road restrictions are applied as Valhalla
+        exclude_polygons / exclude_locations (siren.md §5.2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vehicle_id, to]
+              properties:
+                vehicle_id: {type: string}
+                to: {"$ref": "#/components/schemas/Position"}
+                via_water_source_id: {type: [string, "null"]}
+                restrictions: {type: array, items: {type: string}, description: "restriction ids to apply; default = all verified affecting the vehicle type"}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Route"}}}}
+        "400": {"$ref": "#/components/responses/Error"}
+
+  /routing/water-source-options:
+    post:
+      tags: [routing]
+      summary: >
+        Water-source recommendation via routing matrix: A = vehicle -> source,
+        B = source -> incident. Tank sufficient: score = B. Tank low (level <= 1):
+        score = A + config.water.refill_minutes + B and refill-first is recommended.
+        Top config.routing.max_options, raw km/minutes always returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vehicle_id, incident_id]
+              properties: {vehicle_id: {type: string}, incident_id: {type: string}}
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vehicle_id: {type: string}
+                  incident_id: {type: string}
+                  water_level: {type: integer}
+                  refill_required: {type: boolean}
+                  options: {type: array, items: {"$ref": "#/components/schemas/WaterOption"}}
+        "404": {"$ref": "#/components/responses/Error"}
+
+  /road-restrictions:
+    get:
+      tags: [restrictions]
+      parameters: [{name: status, in: query, schema: {type: string, enum: [pending, verified, rejected, expired, all], default: all}}]
+      responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/RoadRestriction"}}}}}}
+    post:
+      tags: [restrictions]
+      summary: Field report "Jalan tidak muat" (position from GPS, optional photo) or operator drawing on the map
+      requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/RoadRestriction"}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/RoadRestriction"}}}}}
+
+  /road-restrictions/{id}/verify:
+    post:
+      tags: [restrictions]
+      summary: Operator decision — verified restrictions are applied to every routing request
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties: {status: {type: string, enum: [verified, rejected, expired]}, note: {type: [string, "null"]}}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/RoadRestriction"}}}}
+        "400": {"$ref": "#/components/responses/Error"}
+
+  /incidents/{id}/reporter-link:
+    post:
+      tags: [reporter]
+      summary: Single-use expiring link sent over WhatsApp (siren.md §5.7)
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {content: {application/json: {schema: {type: object, properties: {ttl_minutes: {type: [integer, "null"]}}}}}}
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/ReporterLink"}}}}}
+
+  /reporter/{token}/location:
+    post:
+      tags: [reporter]
+      summary: No login, no internal data shown. Coordinates land on the incident.
+      parameters: [{name: token, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lat, lon]
+              properties: {lat: {type: number}, lon: {type: number}, accuracy_m: {type: [number, "null"]}, name: {type: [string, "null"]}}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Incident"}}}}
+        "410": {"description": "link expired or already used"}
+
+  /stats/today:
+    get:
+      tags: [stats]
+      summary: Operator top bar
+      parameters: [{name: date, in: query, schema: {type: string, format: date}}]
+      responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/StatsToday"}}}}}
+
+  /log:
+    get:
+      tags: [live]
+      summary: Event log (daily timeline); filter per incident
+      parameters:
+        - {name: incident_id, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, default: 50}}
+      responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/EventLogEntry"}}}}}}
+
+  /ws:
+    get:
+      tags: [live]
+      summary: >
+        WebSocket upgrade (GET /ws, or ws://host/ws). Envelope and event list are in
+        contracts/events.json. Client sends position.ping, status.set, heartbeat,
+        snapshot.request; server sends the 10 server events plus a snapshot reply.
+      responses: {"101": {description: "WebSocket connection"}}
+
+components:
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: {type: string}
+              detail: {type: [string, "null"]}
+              allowed: {type: [array, "null"], items: {type: string}, description: "allowed values for a rejected enum or transition"}
+
+  schemas:
+    Position:
+      type: object
+      required: [lat, lon]
+      properties:
+        lat: {type: number, minimum: -90, maximum: 90}
+        lon: {type: number, minimum: -180, maximum: 180}
+        accuracy_m: {type: [number, "null"]}
+
+    Team:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        color: {type: string}
+        display_order: {type: integer, default: 0}
+
+    Member:
+      type: object
+      required: [id, name, team_id]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        role: {type: [string, "null"]}
+        team_id: {type: string}
+        vehicle_id: {type: [string, "null"]}
+        status: {type: string, description: "config.member_status values"}
+        freshness: {type: string, enum: [live, stale, offline], description: "computed by the server, never sent by clients"}
+        position: {allOf: [{"$ref": "#/components/schemas/Position"}], description: "latest accepted ping"}
+        position_age_seconds: {type: [number, "null"]}
+
+    VehicleProfile:
+      type: object
+      required: [id, name, vehicle_type]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        vehicle_type: {type: string}
+        height_m: {type: [number, "null"]}
+        width_m: {type: [number, "null"]}
+        length_m: {type: [number, "null"]}
+        gross_weight_kg: {type: [number, "null"]}
+        axle_load_kg: {type: [number, "null"]}
+        valhalla_costing: {type: object}
+
+    Vehicle:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        plate: {type: [string, "null"]}
+        vehicle_type: {type: string}
+        profile_id: {type: [string, "null"]}
+        team_id: {type: [string, "null"]}
+        pump_flow_lpm: {type: [number, "null"]}
+        tank_capacity_l: {type: [number, "null"]}
+        status: {type: string}
+        position: {allOf: [{"$ref": "#/components/schemas/Position"}], description: "latest known position"}
+        eta_minutes: {type: [number, "null"]}
+        water_level: {type: integer, minimum: 0, maximum: 4}
+        water_level_source: {type: string, enum: [operator, officer, estimate]}
+        water_level_confirmed_at: {type: [string, "null"]}
+        estimated: {type: boolean, description: "true when the level is an auto estimate (siren.md L3)"}
+        km_today: {type: number}
+
+    WaterSource:
+      type: object
+      required: [id, name, type, status, lat, lon]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        type: {type: string}
+        status: {type: string}
+        lat: {type: number}
+        lon: {type: number}
+        access_points: {type: array, items: {"$ref": "#/components/schemas/Position"}}
+        capacity_note: {type: [string, "null"]}
+        notes: {type: [string, "null"]}
+
+    IncidentCreate:
+      type: object
+      required: [type, lat, lon]
+      properties:
+        type: {type: string}
+        address: {type: [string, "null"]}
+        description: {type: [string, "null"]}
+        reporter_name: {type: [string, "null"]}
+        lat: {type: number}
+        lon: {type: number}
+
+    Incident:
+      allOf:
+        - {"$ref": "#/components/schemas/IncidentCreate"}
+        - type: object
+          properties:
+            id: {type: string}
+            status: {type: string}
+            created_at: {type: string, format: date-time}
+            dispatched_at: {type: [string, "null"]}
+            arrived_at: {type: [string, "null"]}
+            finished_at: {type: [string, "null"]}
+            cancelled_at: {type: [string, "null"]}
+            assignments: {type: array, items: {"$ref": "#/components/schemas/Assignment"}}
+
+    Assignment:
+      type: object
+      required: [id, incident_id, member_id]
+      properties:
+        id: {type: string}
+        incident_id: {type: string}
+        member_id: {type: string}
+        vehicle_id: {type: [string, "null"]}
+        water_source_id: {type: [string, "null"]}
+        role: {type: [string, "null"]}
+        status: {type: string}
+
+    Leg:
+      type: object
+      required: [from, to, km, minutes]
+      properties:
+        from: {"$ref": "#/components/schemas/Position"}
+        to: {"$ref": "#/components/schemas/Position"}
+        km: {type: number}
+        minutes: {type: number}
+        geometry: {type: array, items: {type: array, items: {type: number}}}
+        source: {type: string, enum: [valhalla, estimate], description: "estimate = straight line x detour_factor at avg speed, used when Valhalla is unavailable"}
+
+    Route:
+      type: object
+      required: [vehicle_id, legs, total_km, total_minutes, applied_restrictions]
+      properties:
+        vehicle_id: {type: string}
+        profile_id: {type: [string, "null"]}
+        legs: {type: array, items: {"$ref": "#/components/schemas/Leg"}}
+        total_km: {type: number}
+        total_minutes: {type: number}
+        refill_minutes: {type: number}
+        applied_restrictions: {type: array, items: {type: string}}
+        provider: {type: string, enum: [valhalla, estimate]}
+
+    WaterOption:
+      type: object
+      required: [water_source_id, a, b, score, refill_required]
+      properties:
+        water_source_id: {type: string}
+        name: {type: string}
+        type: {type: string}
+        status: {type: string}
+        a: {"$ref": "#/components/schemas/Leg"}
+        b: {"$ref": "#/components/schemas/Leg"}
+        score_minutes: {type: number}
+        refill_required: {type: boolean}
+        rank: {type: integer}
+
+    RoadRestriction:
+      type: object
+      required: [id, kind, geometry, reason, status]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [point, line, polygon]}
+        geometry:
+          type: object
+          required: [kind, coordinates]
+          properties:
+            kind: {type: string, enum: [point, line, polygon]}
+            coordinates: {type: array, items: {type: array, items: {type: number}}}
+        reason: {type: string}
+        affected_vehicle_type: {type: string, enum: [truck, motorbike, patrol_car, all]}
+        status: {type: string, enum: [pending, verified, rejected, expired]}
+        reported_by: {type: [string, "null"]}
+        reported_at: {type: [string, "null"]}
+        verified_at: {type: [string, "null"]}
+        expires_at: {type: [string, "null"]}
+        note: {type: [string, "null"]}
+        photo_url: {type: [string, "null"]}
+
+    ReporterLink:
+      type: object
+      required: [token, url, incident_id, expires_at]
+      properties:
+        token: {type: string}
+        url: {type: string}
+        incident_id: {type: string}
+        expires_at: {type: string, format: date-time}
+        status: {type: string, enum: [pending, received, expired, used]}
+
+    EventLogEntry:
+      type: object
+      required: [id, ts, type, text]
+      properties:
+        id: {type: string}
+        ts: {type: string, format: date-time}
+        type: {type: string}
+        incident_id: {type: [string, "null"]}
+        actor: {type: [string, "null"]}
+        text: {type: string, description: "Indonesian UI sentence"}
+        payload: {type: object}
+
+    StatsToday:
+      type: object
+      required: [date, incidents_active, incidents_finished, km_total, refills, avg_response_minutes]
+      properties:
+        date: {type: string, format: date}
+        incidents_active: {type: integer}
+        incidents_finished: {type: integer}
+        km_total: {type: number}
+        km_per_vehicle: {type: object, additionalProperties: {type: number}}
+        refills: {type: integer}
+        avg_response_minutes: {type: [number, "null"]}
+        weather: {type: [object, "null"]}
+
+    Snapshot:
+      type: object
+      required: [server_ts, config, teams, members, vehicles, water_sources, incidents, assignments, road_restrictions, stats_today]
+      properties:
+        server_ts: {type: string, format: date-time}
+        last_event_id: {type: [string, "null"]}
+        config: {type: object}
+        stations: {type: array, items: {type: object}}
+        teams: {type: array, items: {"$ref": "#/components/schemas/Team"}}
+        members: {type: array, items: {"$ref": "#/components/schemas/Member"}}
+        vehicles: {type: array, items: {"$ref": "#/components/schemas/Vehicle"}}
+        water_sources: {type: array, items: {"$ref": "#/components/schemas/WaterSource"}}
+        incidents: {type: array, items: {"$ref": "#/components/schemas/Incident"}}
+        assignments: {type: array, items: {"$ref": "#/components/schemas/Assignment"}}
+        road_restrictions: {type: array, items: {"$ref": "#/components/schemas/RoadRestriction"}}
+        reporter_links: {type: array, items: {"$ref": "#/components/schemas/ReporterLink"}}
+        event_log: {type: array, items: {"$ref": "#/components/schemas/EventLogEntry"}}
+        stats_today: {"$ref": "#/components/schemas/StatsToday"}

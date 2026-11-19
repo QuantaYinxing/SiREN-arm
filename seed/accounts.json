@@ -1,0 +1,9 @@
+[
+  {"username": "operator", "role": "operator", "password": "siren-dev", "member_id": null},
+  {"username": "a.asep", "role": "officer", "password": "siren-dev", "member_id": "A"},
+  {"username": "b.budi", "role": "officer", "password": "siren-dev", "member_id": "B"},
+  {"username": "c.cecep", "role": "officer", "password": "siren-dev", "member_id": "C"},
+  {"username": "d.dede", "role": "officer", "password": "siren-dev", "member_id": "D"},
+  {"username": "e.eko", "role": "officer", "password": "siren-dev", "member_id": "E"},
+  {"username": "f.fajar", "role": "officer", "password": "siren-dev", "member_id": "F"}
+]

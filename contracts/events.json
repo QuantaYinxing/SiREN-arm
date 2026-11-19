@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "envelope": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SiREN WebSocket envelope",
+    "type": "object",
+    "required": ["id", "type", "ts", "v", "payload"],
+    "properties": {
+      "id": {"type": "string", "description": "Server-assigned monotonic event id, e.g. ev_101"},
+      "type": {"type": "string", "description": "Event type, one of server_events[].type"},
+      "ts": {"type": "string", "format": "date-time", "description": "Server time the event was produced"},
+      "v": {"type": "integer", "const": 1, "description": "Payload schema version"},
+      "payload": {"type": "object"}
+    },
+    "additionalProperties": false
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": {"type": "number", "minimum": -90, "maximum": 90},
+        "lon": {"type": "number", "minimum": -180, "maximum": 180},
+        "accuracy_m": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "freshness": {"enum": ["live", "stale", "offline"]},
+    "geometry": {
+      "type": "object",
+      "required": ["kind", "coordinates"],
+      "properties": {
+        "kind": {"enum": ["point", "line", "polygon"]},
+        "coordinates": {
+          "type": "array",
+          "items": {"type": "array", "items": {"type": "number"}},
+          "description": "point: [[lat,lon]]; line: [[lat,lon],...]; polygon: [[lat,lon],...] closed ring"
+        }
+      },
+      "additionalProperties": false
+    },
+    "leg": {
+      "type": "object",
+      "required": ["from", "to", "km", "minutes"],
+      "properties": {
+        "from": {"$ref": "#/defs/position"},
+        "to": {"$ref": "#/defs/position"},
+        "km": {"type": "number", "minimum": 0},
+        "minutes": {"type": "number", "minimum": 0},
+        "geometry": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}
+      },
+      "additionalProperties": false
+    },
+    "incident": {
+      "type": "object",
+      "required": ["id", "type", "status", "location", "created_at"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "description": "Incident kind, free text or enum from config"},
+        "address": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "reporter_name": {"type": ["string", "null"]},
+        "status": {"type": "string"},
+        "location": {"$ref": "#/defs/position"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "dispatched_at": {"type": ["string", "null"]},
+        "arrived_at": {"type": ["string", "null"]},
+        "finished_at": {"type": ["string", "null"]},
+        "cancelled_at": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "assignment": {
+      "type": "object",
+      "required": ["id", "incident_id", "member_id", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "incident_id": {"type": "string"},
+        "member_id": {"type": "string"},
+        "vehicle_id": {"type": ["string", "null"]},
+        "water_source_id": {"type": ["string", "null"]},
+        "role": {"type": ["string", "null"]},
+        "status": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "member": {
+      "type": "object",
+      "required": ["id", "name", "team_id", "status", "freshness"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "role": {"type": ["string", "null"]},
+        "team_id": {"type": "string"},
+        "vehicle_id": {"type": ["string", "null"]},
+        "status": {"type": "string"},
+        "freshness": {"$ref": "#/defs/freshness"},
+        "position": {"type": ["object", "null"]},
+        "position_age_seconds": {"type": ["number", "null"]},
+        "updated_at": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "vehicle": {
+      "type": "object",
+      "required": ["id", "name", "status", "water_level"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "plate": {"type": ["string", "null"]},
+        "vehicle_type": {"type": "string"},
+        "profile_id": {"type": ["string", "null"]},
+        "team_id": {"type": ["string", "null"]},
+        "status": {"type": "string"},
+        "position": {"type": ["object", "null"]},
+        "eta_minutes": {"type": ["number", "null"]},
+        "water_level": {"type": "integer", "minimum": 0, "maximum": 4},
+        "water_level_source": {"enum": ["operator", "officer", "estimate"]},
+        "water_level_confirmed_at": {"type": ["string", "null"]},
+        "estimated": {"type": "boolean"},
+        "km_today": {"type": "number"},
+        "pump_flow_lpm": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "waterSource": {
+      "type": "object",
+      "required": ["id", "name", "type", "status", "location"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "status": {"type": "string"},
+        "location": {"$ref": "#/defs/position"},
+        "access_points": {"type": "array", "items": {"$ref": "#/defs/position"}},
+        "capacity_note": {"type": ["string", "null"]},
+        "notes": {"type": ["string", "null"]},
+        "updated_at": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "roadRestriction": {
+      "type": "object",
+      "required": ["id", "kind", "geometry", "reason", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"enum": ["point", "line", "polygon"]},
+        "geometry": {"$ref": "#/defs/geometry"},
+        "reason": {"type": "string"},
+        "affected_vehicle_type": {"enum": ["truck", "motorbike", "patrol_car", "all"]},
+        "status": {"enum": ["pending", "verified", "rejected", "expired"]},
+        "reported_by": {"type": ["string", "null"]},
+        "reported_at": {"type": ["string", "null"]},
+        "verified_at": {"type": ["string", "null"]},
+        "expires_at": {"type": ["string", "null"]},
+        "note": {"type": ["string", "null"]},
+        "photo_url": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "eventLogEntry": {
+      "type": "object",
+      "required": ["id", "ts", "type", "text"],
+      "properties": {
+        "id": {"type": "string"},
+        "ts": {"type": "string", "format": "date-time"},
+        "type": {"type": "string"},
+        "incident_id": {"type": ["string", "null"]},
+        "actor": {"type": ["string", "null"]},
+        "text": {"type": "string", "description": "Indonesian UI sentence"}
+      },
+      "additionalProperties": false
+    },
+    "statsToday": {
+      "type": "object",
+      "required": ["incidents_active", "incidents_finished", "km_total", "refills", "avg_response_minutes"],
+      "properties": {
+        "date": {"type": "string", "format": "date"},
+        "incidents_active": {"type": "integer"},
+        "incidents_finished": {"type": "integer"},
+        "km_total": {"type": "number"},
+        "km_per_vehicle": {"type": "object", "additionalProperties": {"type": "number"}},
+        "refills": {"type": "integer"},
+        "avg_response_minutes": {"type": ["number", "null"]},
+        "weather": {"type": ["object", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["server_ts", "config", "teams", "members", "vehicles", "water_sources", "incidents", "assignments", "road_restrictions", "stats_today"],
+      "properties": {
+        "server_ts": {"type": "string", "format": "date-time"},
+        "last_event_id": {"type": ["string", "null"]},
+        "config": {"type": "object", "description": "Full config.yaml content (enums, transitions, thresholds)"},
+        "stations": {"type": "array", "items": {"type": "object"}},
+        "teams": {"type": "array", "items": {"type": "object"}},
+        "members": {"type": "array", "items": {"$ref": "#/defs/member"}},
+        "vehicles": {"type": "array", "items": {"$ref": "#/defs/vehicle"}},
+        "water_sources": {"type": "array", "items": {"$ref": "#/defs/waterSource"}},
+        "incidents": {"type": "array", "items": {"$ref": "#/defs/incident"}},
+        "assignments": {"type": "array", "items": {"$ref": "#/defs/assignment"}},
+        "road_restrictions": {"type": "array", "items": {"$ref": "#/defs/roadRestriction"}},
+        "position_pings": {"type": "array", "items": {"type": "object"}},
+        "reporter_links": {"type": "array", "items": {"type": "object"}},
+        "event_log": {"type": "array", "items": {"$ref": "#/defs/eventLogEntry"}, "description": "Most recent entries only"},
+        "stats_today": {"$ref": "#/defs/statsToday"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "server_events": [
+    {
+      "type": "incident.created",
+      "payload": {"type": "object", "required": ["incident"], "properties": {"incident": {"$ref": "#/defs/incident"}}, "additionalProperties": false}
+    },
+    {
+      "type": "incident.updated",
+      "payload": {"type": "object", "required": ["incident_id", "status", "incident"], "properties": {"incident_id": {"type": "string"}, "status": {"type": "string"}, "incident": {"$ref": "#/defs/incident"}}, "additionalProperties": false}
+    },
+    {
+      "type": "assignment.updated",
+      "payload": {"type": "object", "required": ["incident_id", "assignments"], "properties": {"incident_id": {"type": "string"}, "assignments": {"type": "array", "items": {"$ref": "#/defs/assignment"}}, "vehicle_id": {"type": ["string", "null"]}, "water_source_id": {"type": ["string", "null"]}}, "additionalProperties": false}
+    },
+    {
+      "type": "member.position",
+      "payload": {"type": "object", "required": ["member_id", "position", "freshness"], "properties": {"member_id": {"type": "string"}, "vehicle_id": {"type": ["string", "null"]}, "position": {"$ref": "#/defs/position"}, "freshness": {"$ref": "#/defs/freshness"}, "position_age_seconds": {"type": "number"}}, "additionalProperties": false}
+    },
+    {
+      "type": "member.status",
+      "payload": {"type": "object", "required": ["member_id", "status"], "properties": {"member_id": {"type": "string"}, "status": {"type": "string"}, "incident_id": {"type": ["string", "null"]}}, "additionalProperties": false}
+    },
+    {
+      "type": "vehicle.water_level",
+      "payload": {"type": "object", "required": ["vehicle_id", "level", "source"], "properties": {"vehicle_id": {"type": "string"}, "level": {"type": "integer", "minimum": 0, "maximum": 4}, "source": {"enum": ["operator", "officer", "estimate"]}, "confirmed_at": {"type": ["string", "null"]}}, "additionalProperties": false}
+    },
+    {
+      "type": "restriction.reported",
+      "payload": {"type": "object", "required": ["restriction"], "properties": {"restriction": {"$ref": "#/defs/roadRestriction"}}, "additionalProperties": false}
+    },
+    {
+      "type": "restriction.updated",
+      "payload": {"type": "object", "required": ["restriction_id", "status", "restriction"], "properties": {"restriction_id": {"type": "string"}, "status": {"enum": ["pending", "verified", "rejected", "expired"]}, "restriction": {"$ref": "#/defs/roadRestriction"}}, "additionalProperties": false}
+    },
+    {
+      "type": "waterSource.updated",
+      "payload": {"type": "object", "required": ["water_source"], "properties": {"water_source": {"$ref": "#/defs/waterSource"}, "removed": {"type": "boolean"}}, "additionalProperties": false}
+    },
+    {
+      "type": "config.updated",
+      "payload": {"type": "object", "required": ["key", "value"], "properties": {"key": {"type": "string"}, "value": {}}, "additionalProperties": false}
+    }
+  ],
+  "client_events": [
+    {
+      "type": "position.ping",
+      "payload": {"type": "object", "required": ["member_id", "position"], "properties": {"member_id": {"type": "string"}, "vehicle_id": {"type": ["string", "null"]}, "position": {"$ref": "#/defs/position"}, "status": {"type": ["string", "null"]}}, "additionalProperties": false}
+    },
+    {
+      "type": "status.set",
+      "payload": {"type": "object", "required": ["member_id", "status"], "properties": {"member_id": {"type": "string"}, "status": {"type": "string"}}, "additionalProperties": false}
+    },
+    {
+      "type": "heartbeat",
+      "payload": {"type": "object", "required": ["client_id"], "properties": {"client_id": {"type": "string"}, "app": {"enum": ["ops", "field"]}, "member_id": {"type": ["string", "null"]}}, "additionalProperties": false}
+    },
+    {
+      "type": "snapshot.request",
+      "payload": {"type": "object", "properties": {"since_event_id": {"type": ["string", "null"]}}, "additionalProperties": false}
+    }
+  ]
+}

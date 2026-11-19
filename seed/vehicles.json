@@ -1,0 +1,28 @@
+[
+  {
+    "id": "v1",
+    "name": "Truk 1",
+    "plate": "Z 8123 AB",
+    "vehicle_type": "truck",
+    "profile_id": "vp_truck",
+    "team_id": "t1",
+    "pump_flow_lpm": 800,
+    "tank_capacity_l": 4000,
+    "status": "Standby",
+    "lat": -7.154,
+    "lon": 107.7025
+  },
+  {
+    "id": "v2",
+    "name": "Truk 2",
+    "plate": "Z 8124 AB",
+    "vehicle_type": "truck",
+    "profile_id": "vp_truck",
+    "team_id": "t2",
+    "pump_flow_lpm": 800,
+    "tank_capacity_l": 4000,
+    "status": "Standby",
+    "lat": -7.218,
+    "lon": 107.72
+  }
+]

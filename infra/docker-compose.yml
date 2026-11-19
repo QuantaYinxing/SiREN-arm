@@ -1,0 +1,102 @@
+# SiREN container stack (docs/siren.md §Deployment: compose + Caddy).
+# Written for the production VPS; docker and podman are NOT installed on this
+# laptop, so this stack has never been executed here (infra/README.md).
+# All host paths are relative to infra/, this file's directory.
+
+name: siren
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-siren}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siren-dev}   # override via .env in production
+      POSTGRES_DB: siren
+    volumes:
+      # Named volume: the database survives `compose down`, unlike a host mount.
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # PostGIS phase (contracts/db.sql) talks to this from psql/migrations;
+      # the backend still uses SQLite until that phase lands.
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siren -d siren"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  valhalla:
+    image: valhalla/valhalla:latest
+    # One worker thread: routing requests are single-vehicle, laptop-sized; this
+    # is the CPU cap for the engine (docs/rules.md heavy-build rules).
+    command: ["valhalla_service", "/usr/local/etc/valhalla.json", "1"]
+    volumes:
+      # Routing tiles built by scripts/valhalla_build.sh; read-only because the
+      # service never mutates its tile extract.
+      - ../.sandbox/data/valhalla:/valhalla/tiles:ro
+      # Service config from this repo, at Valhalla's expected default path.
+      - ./valhalla.json:/usr/local/etc/valhalla.json:ro
+    ports:
+      - "8081:8081"
+    # No healthcheck: the Valhalla image ships no curl/wget, and a route probe
+    # needs tiles that may not exist before the first build.
+
+  backend:
+    build:
+      # Requires backend/Dockerfile (added with backend packaging). FastAPI app is
+      # siren.main:app; uvicorn[standard] ships in backend/pyproject.toml.
+      context: ../backend
+    command: ["uvicorn", "siren.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SIREN_DB: /data/siren.sqlite            # SQLite lives inside the shared data dir
+      SIREN_CONFIG: /config/config.yaml       # mounted read-only below
+      VALHALLA_URL: http://valhalla:8081      # compose service DNS name
+    volumes:
+      # Read-write host mount: the store writes its SQLite DB here and Valhalla
+      # tiles / vector tiles share the same .sandbox/data directory.
+      - ../.sandbox/data:/data
+      # contracts/config.yaml is the enum/knob source of truth (contracts/ owns it).
+      - ../contracts/config.yaml:/config/config.yaml:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      # Backend degrades to the estimate provider if Valhalla is down, but
+      # Valhalla must start first so real routing works from the first request.
+      valhalla:
+        condition: service_started
+    # No healthcheck: the backend image is not guaranteed to ship curl.
+
+  tiles:
+    image: maptiler/tileserver-gl:latest   # official TileServer GL image
+    # Serves every *.pmtiles found in /data (built by scripts/tiles_build.sh).
+    command: ["tileserver-gl", "--serve", "/data"]
+    volumes:
+      # Vector tiles from Protomaps; read-only, the server never writes.
+      - ../.sandbox/data/tiles:/data:ro
+    ports:
+      - "8082:8082"
+
+  caddy:
+    image: caddy:2
+    volumes:
+      # Proxy rules: backend reverse proxy + the two SPA apps. Automatic HTTPS
+      # needs DNS for siren.id; certificate state persists in the volume below.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      # The SPA dist dirs come from the later frontend phase (apps/ops, apps/field).
+      # Uncomment once they are built; Caddy's cwd inside the image is /srv, so
+      # the `../apps/...` roots in the Caddyfile resolve to /apps/... here:
+      # - ../apps/ops/dist:/apps/ops/dist:ro
+      # - ../apps/field/dist:/apps/field/dist:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  pgdata:        # PostgreSQL/PostGIS data
+  caddy-data:    # ACME certificates
+  caddy-config:  # Caddy autosave config

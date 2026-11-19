@@ -1,0 +1,184 @@
+# SiREN initial config — enums and runtime knobs
+#
+# Source of truth for the `/config/{key}` endpoints. Nothing mutable is hard-coded
+# (docs/siren.md D6): UI options, allowed transitions, thresholds, and routing knobs
+# all come from here.
+#
+# Canonical enum VALUES are Indonesian operational names (docs/rules.md §4); `label`
+# is the Indonesian UI string, `gloss` is the English explanation used in
+# documentation and admin tools.
+version: 1
+
+auth:
+  roles: [operator, officer]
+
+roles_member:
+  komandan: {label: Komandan, gloss: team leader / commander}
+  pompa_operator: {label: "Operator pompa", gloss: pump operator}
+  pemadam: {label: Pemadam, gloss: firefighter}
+
+vehicle_types:
+  truck: {label: Truk, gloss: fire truck}
+  motorbike: {label: Motor, gloss: motorbike}
+  patrol_car: {label: "Mobil patroli", gloss: small patrol car}
+
+vehicle_status:
+  Standby: {label: Standby, gloss: at station, available}
+  Dispatched: {label: Ditugaskan, gloss: assigned, not moving yet}
+  EnRoute: {label: "Menuju lokasi", gloss: travelling to the incident}
+  OnScene: {label: "Di lokasi", gloss: at the incident site}
+  Returning: {label: "Kembali ke pos", gloss: returning to the station}
+  IsiUlang: {label: "Isi ulang", gloss: refilling water at a source}
+  Offline: {label: Offline, gloss: not reporting}
+
+member_status:
+  Standby: {label: Standby, gloss: at station, available}
+  Dispatched: {label: Ditugaskan, gloss: assigned, not moving yet}
+  EnRoute: {label: "Menuju lokasi", gloss: travelling to the incident}
+  OnScene: {label: "Di lokasi", gloss: at the incident site}
+  Returning: {label: "Kembali ke pos", gloss: returning to the station}
+  IsiUlang: {label: "Isi ulang", gloss: refilling water at a source}
+  Istirahat: {label: Istirahat, gloss: resting}
+  Offline: {label: Offline, gloss: not reporting}
+
+incident_status:
+  Baru: {label: Baru, gloss: new, not dispatched yet}
+  Dispatched: {label: Ditugaskan, gloss: crew assigned}
+  EnRoute: {label: "Menuju lokasi", gloss: crew travelling}
+  OnScene: {label: "Di lokasi", gloss: crew at the site}
+  Returning: {label: "Kembali ke pos", gloss: crew returning}
+  Selesai: {label: Selesai, gloss: finished}
+  Dibatalkan: {label: Dibatalkan, gloss: cancelled}
+
+assignment_status:
+  Dispatched: {label: Ditugaskan, gloss: assigned, crew not moving yet}
+  EnRoute: {label: "Menuju lokasi", gloss: crew travelling}
+  OnScene: {label: "Di lokasi", gloss: crew at the site}
+  Returning: {label: "Kembali ke pos", gloss: crew returning}
+  Completed: {label: Selesai, gloss: assignment finished}
+  Withdrawn: {label: Dibatalkan, gloss: assignment cancelled}
+
+transitions:
+  # Allowed status transitions. Anything not listed here is rejected.
+  incident:
+    Baru: [Dispatched, Dibatalkan]
+    Dispatched: [EnRoute, Baru, Dibatalkan]   # Baru = all assignments withdrawn
+    EnRoute: [OnScene, Returning, Dibatalkan]
+    OnScene: [Returning, Selesai]
+    Returning: [Selesai]
+    Selesai: []
+    Dibatalkan: [Baru]
+  member:
+    Standby: [Dispatched, Istirahat, Offline]
+    Dispatched: [EnRoute, Standby, Offline]   # Standby = assignment withdrawn
+    EnRoute: [OnScene, IsiUlang, Returning, Standby, Offline]
+    IsiUlang: [EnRoute, OnScene, Returning, Offline]
+    OnScene: [Returning, IsiUlang, Offline]
+    Returning: [Standby, IsiUlang, Offline]
+    Istirahat: [Standby, Dispatched, Offline]
+    Offline: [Standby]
+  vehicle:
+    Standby: [Dispatched, Offline]
+    Dispatched: [EnRoute, Standby, Offline]
+    EnRoute: [OnScene, IsiUlang, Returning, Standby, Offline]
+    IsiUlang: [EnRoute, OnScene, Returning, Offline]
+    OnScene: [Returning, IsiUlang, Offline]
+    Returning: [Standby, IsiUlang, Offline]
+    Offline: [Standby]
+  # The single big button on /field: the normal next step of the duty cycle.
+  next_action:
+    Dispatched: EnRoute
+    EnRoute: OnScene
+    OnScene: Returning
+    Returning: Standby
+    IsiUlang: EnRoute
+  next_action_label:
+    EnRoute: Berangkat
+    OnScene: Tiba di lokasi
+    Returning: "Selesai · kembali ke pos"
+    Standby: Tiba di pos
+
+water_level:
+  # Ordered ascending; `value` is the integer stored in water_level_reading.level.
+  options:
+    - {value: 0, label: "Kosong", gloss: empty}
+    - {value: 1, label: "¼", gloss: quarter}
+    - {value: 2, label: "½", gloss: half}
+    - {value: 3, label: "¾", gloss: three quarters}
+    - {value: 4, label: "Penuh", gloss: full}
+  reading_sources: [operator, officer, estimate]
+
+water_source_types:
+  hydrant: {label: Hidran, gloss: fire hydrant}
+  river: {label: Sungai, gloss: river}
+  pond: {label: Kolam, gloss: pond}
+  tank: {label: Tandon, gloss: water tank}
+  well: {label: Sumur, gloss: well}
+  other: {label: Lainnya, gloss: other}
+
+water_source_status:
+  active: {label: Aktif, gloss: usable}
+  dry: {label: Kering, gloss: no water}
+  broken: {label: Rusak, gloss: broken}
+  inactive: {label: Nonaktif, gloss: disabled}
+
+restriction_reason:
+  narrow: {label: "Jalan tidak muat", gloss: road too narrow for the vehicle}
+  low_bridge: {label: "Jembatan rendah", gloss: bridge too low}
+  flood: {label: "Genangan banjir", gloss: flooding}
+  weight_limit: {label: "Batasan beban", gloss: weight limit}
+  blocked: {label: "Terghalang", gloss: blocked / obstacle}
+  other: {label: Lainnya, gloss: other}
+
+restriction_status:
+  pending: {label: "Menunggu verifikasi", gloss: reported, awaiting operator review}
+  verified: {label: Terverifikasi, gloss: applied to routing requests}
+  rejected: {label: Ditolak, gloss: not applied}
+  expired: {label: "Sudah kedaluwarsa", gloss: validity passed, not applied}
+
+restriction_kinds: [point, line, polygon]
+restriction_affects: [truck, motorbike, patrol_car, all]
+
+position:
+  ping_live_seconds: 5          # reporting rate while duty status is active
+  ping_standby_seconds: 300     # reporting rate while on standby
+  stale_after_seconds: 300      # > 5 min without ping -> freshness "stale"
+  offline_after_seconds: 900    # longer threshold -> freshness "offline"
+  accuracy_warn_m: 50
+  retention_days: 30            # GPS history retention (open question siren.md §12.7)
+
+routing:
+  provider: valhalla            # valhalla | estimate
+  valhalla_url: "http://127.0.0.1:8081"
+  costing: truck                # per-vehicle mapping lives in VehicleProfile.valhalla_costing
+  max_options: 3                # water-source recommendation Top N
+  fallback:                     # used when provider=estimate or Valhalla is unreachable
+    avg_speed_kmh: 25
+    min_minutes: 1
+    detour_factor: 1.3          # straight-line x detour_factor, rounded up
+    blocked_penalty: 1.6        # extra slowdown when an estimated leg crosses a restriction
+
+water:
+  auto_estimate: true           # estimated drop while status is IsiUlang/pumping
+  default_pump_flow_lpm: 800
+  tank_capacity_l: 4000
+  refill_minutes: 3
+  refill_confirm: true          # "refill finished" resets to full only after confirm
+  low_level_threshold: 1        # level <= this -> refill-first scoring (score = A + isi ulang + B)
+
+dispatch:
+  max_members_per_assignment: 12
+  warn_cross_team: true
+  warn_missing_vehicle: true
+  warn_vehicle_in_use: true
+  warn_stale_gps: true
+
+reporter_link:
+  ttl_minutes: 30
+  single_use: true
+  base_url: "https://siren.id/r"
+
+stats:
+  response_window_days: 7       # window used for average response time
+  weather_enabled: false
+  weather_source: null

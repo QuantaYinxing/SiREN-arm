@@ -1,0 +1,60 @@
+{
+  "//": "Valhalla service config. Mounted read-only at /usr/local/etc/valhalla.json by infra/docker-compose.yml; tile extract built by scripts/valhalla_build.sh into .sandbox/data/valhalla (visible as /valhalla/tiles/valhalla_tiles.tar in the container).",
+  "//routing": "Costing names here match backend/siren/routing.py COSTING_BY_TYPE: truck -> truck, motorbike -> motorcycle, patrol_car -> auto. VehicleProfile.valhalla_costing (contracts/db.sql) overrides these defaults per request (e.g. use_osm_trucking_on_road, dimensions, weight).",
+  "routing": {
+    "type": ["truck", "motorcycle", "auto"],
+    "max_distance": 500000,
+    "max_eval": 20000000,
+    "initial_distance": 100,
+    "initial_cost": 200,
+    "max_cost": 1000000000,
+    "hop_based_limit": false,
+    "access_costing": true,
+    "predict_traffic": false,
+    "costing": {
+      "auto": {
+        "use_low_priority": false,
+        "navigate_curves": true
+      },
+      "motorcycle": {
+        "use_low_priority": false
+      },
+      "truck": {
+        "//": "Fire trucks need trucking access (unpaved/driveway edges) and must never cost haulage cheaply; static + interpolating costing both enabled so profiles can pick either per vehicle.",
+        "use_osm_trucking_on_road": true,
+        "allow_forward": false,
+        "max_haulage_costing": true,
+        "truck_costing": {
+          "static": {
+            "max_scaling_factor": 0.5,
+            "load_to_capacity_ratio": true,
+            "truck_speed": "fast_mode"
+          },
+          "interpolating": {
+            "max_scaling_factor": 0.5,
+            "load_to_capacity_ratio": true,
+            "truck_speed": "fast_mode"
+          }
+        }
+      }
+    },
+    "router": {
+      "tile_extract": "/valhalla/tiles/valhalla_tiles.tar",
+      "spatial_index": {
+        "sqlite_file": "/valhalla/tiles/valhalla_tiles.spatial.idx.sqlite"
+      }
+    }
+  },
+  "service": {
+    "//": "route is the only method SiREN calls (backend ValhallaClient POSTs /route); workers capped to 1 like the compose command.",
+    "allowed_methods": ["route"],
+    "workers": 1
+  },
+  "logging": {
+    "type": "std",
+    "level": "info"
+  },
+  "metrics": {
+    "action": "none"
+  }
+}

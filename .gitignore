@@ -1,0 +1,21 @@
+# Documentation and prototype stay local (not tracked).
+docs/
+prototype/
+
+# Sandboxed installs and generated data (docs/rules.md §3).
+.sandbox/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime state.
+*.sqlite
+*.sqlite3
+*.log
+.env
+dist/
+build/

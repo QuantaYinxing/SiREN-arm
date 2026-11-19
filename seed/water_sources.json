@@ -1,0 +1,42 @@
+[
+  {
+    "id": "w1",
+    "name": "Hidran Pasar Cikurubuk",
+    "type": "hydrant",
+    "status": "active",
+    "lat": -7.13,
+    "lon": 107.75,
+    "capacity_note": "± 600 L/mnt",
+    "access_points": [{"lat": -7.13, "lon": 107.75}]
+  },
+  {
+    "id": "w2",
+    "name": "Sungai Ciwulan",
+    "type": "river",
+    "status": "active",
+    "lat": -7.182,
+    "lon": 107.7925,
+    "capacity_note": "debit besar, akses turun tebing",
+    "access_points": [{"lat": -7.182, "lon": 107.7925}]
+  },
+  {
+    "id": "w3",
+    "name": "Kolam Taman Kota",
+    "type": "pond",
+    "status": "active",
+    "lat": -7.13,
+    "lon": 107.7025,
+    "capacity_note": "± 40 m³",
+    "access_points": [{"lat": -7.13, "lon": 107.7025}]
+  },
+  {
+    "id": "w4",
+    "name": "Tandon Kodim",
+    "type": "tank",
+    "status": "dry",
+    "lat": -7.182,
+    "lon": 107.6625,
+    "capacity_note": "kosong",
+    "access_points": [{"lat": -7.182, "lon": 107.6625}]
+  }
+]

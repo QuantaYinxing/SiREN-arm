@@ -1,0 +1,8 @@
+[
+  {"id": "A", "name": "Asep", "role": "komandan", "team_id": "t1", "vehicle_id": "v1", "status": "Standby"},
+  {"id": "B", "name": "Budi", "role": "pompa_operator", "team_id": "t1", "vehicle_id": "v1", "status": "Standby"},
+  {"id": "C", "name": "Cecep", "role": "pemadam", "team_id": "t1", "vehicle_id": "v1", "status": "Standby"},
+  {"id": "D", "name": "Dede", "role": "komandan", "team_id": "t2", "vehicle_id": "v2", "status": "Standby"},
+  {"id": "E", "name": "Eko", "role": "pompa_operator", "team_id": "t2", "vehicle_id": "v2", "status": "Standby"},
+  {"id": "F", "name": "Fajar", "role": "pemadam", "team_id": "t2", "vehicle_id": "v2", "status": "Standby"}
+]

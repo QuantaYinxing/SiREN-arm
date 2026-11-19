@@ -1,0 +1,18 @@
+[project]
+name = "siren-backend"
+version = "0.1.0"
+description = "SiREN backend: dispatch, routing (Valhalla), WebSocket hub"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.34",
+  "pydantic>=2.9",
+  "PyYAML>=6.0",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3"]
+
+[project.scripts]
+siren = "siren.main:run"

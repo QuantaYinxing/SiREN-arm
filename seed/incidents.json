@@ -1,0 +1,28 @@
+[
+  {
+    "id": "I-25",
+    "type": "Kebakaran dapur rumah",
+    "status": "Selesai",
+    "lat": -7.154,
+    "lon": 107.75,
+    "address": "Jl. Sutisna Senjaya",
+    "description": null,
+    "reporter_name": null,
+    "assignments": [
+      {"member_id": "D", "vehicle_id": "v2", "water_source_id": "w1", "role": "komandan", "status": "Completed"},
+      {"member_id": "E", "vehicle_id": "v2", "water_source_id": "w1", "role": "pompa_operator", "status": "Completed"},
+      {"member_id": "F", "vehicle_id": "v2", "water_source_id": "w1", "role": "pemadam", "status": "Completed"}
+    ]
+  },
+  {
+    "id": "I-27",
+    "type": "Kebakaran ruko",
+    "status": "Baru",
+    "lat": -7.102,
+    "lon": 107.77,
+    "address": "Jl. Cihideung No. 41",
+    "description": null,
+    "reporter_name": "Warga via tautan",
+    "assignments": []
+  }
+]

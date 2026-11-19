@@ -1,0 +1,35 @@
+# SiREN reverse proxy (docs/siren.md: Caddy -> FastAPI, automatic HTTPS).
+# Plain Caddy directives only: no scripts, no upstream pools, no middleware chains.
+
+siren.id {
+  # FastAPI backend: REST API and WebSocket (/ws) both proxy through here.
+  # `backend` is the compose service name; for host-side dev use 127.0.0.1:8000.
+  reverse_proxy backend:8000
+
+  # SPA apps live under /ops and /field. Their dist dirs come from the later
+  # frontend phase (apps/ops/dist, apps/field/dist); until that phase builds
+  # them these roots do not exist and the paths 404, which is harmless.
+  # `root` is relative to Caddy's working directory: in the compose container
+  # that is /srv, so ../apps/... resolves to /apps/... (see the commented
+  # mounts in docker-compose.yml). Run Caddy from infra/ locally and the same
+  # path resolves to the repo's apps/ directory.
+
+  handle_path /ops/* {
+    root ../apps/ops/dist
+    try_files {path} /index.html   # SPA fallback: unknown paths serve the app shell
+    file_server
+  }
+
+  handle_path /field/* {
+    root ../apps/field/dist
+    try_files {path} /index.html
+    file_server
+  }
+}
+
+# Automatic HTTPS is on by default for siren.id: Caddy requests and renews the
+# certificate once DNS points at the VPS. Localhost dev needs no TLS and no
+# Caddy at all — run uvicorn directly (infra/README.md). To exercise the proxy
+# locally without certificates, add:
+#
+#   localhost { reverse_proxy 127.0.0.1:8000 }
