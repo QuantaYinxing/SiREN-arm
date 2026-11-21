@@ -432,6 +432,11 @@ class Store:
     def close(self) -> None:
         self.conn.close()
 
+    def now_seconds(self) -> float:
+        """Current time as epoch seconds (virtual clock in game mode)."""
+        now = self._now()
+        return now.timestamp() if isinstance(now, datetime) else float(now)
+
     def now_iso(self) -> str:
         """Current UTC time as ISO-8601 with 'Z'."""
         return now_iso(self._now())

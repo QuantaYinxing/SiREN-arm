@@ -21,6 +21,7 @@ tags:
   - name: reporter
   - name: stats
   - name: live
+  - name: dev
 
 paths:
   /snapshot:
@@ -372,6 +373,20 @@ paths:
         - {name: incident_id, in: query, schema: {type: string}}
         - {name: limit, in: query, schema: {type: integer, default: 50}}
       responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/EventLogEntry"}}}}}}
+
+  /game/incident:
+    post:
+      tags: [dev]
+      summary: Game mode only (docs/siren.md §9) — spawn one synthetic incident
+      responses:
+        "201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Incident"}}}}
+        "404": {"$ref": "#/components/responses/Error"}
+
+  /game/state:
+    get:
+      tags: [dev]
+      summary: Game mode diagnostics — mode, speed multiplier, tick count, virtual clock
+      responses: {"200": {description: "{mode, speed, ticks, virtual_now}"}}
 
   /ws:
     get:

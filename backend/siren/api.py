@@ -87,7 +87,7 @@ def dispatch_warnings(config: Config, store: Store, members: list[dict], vehicle
     return warnings
 
 
-def create_app(store: Store, config: Config | None = None, hub: Any = None) -> FastAPI:
+def create_app(store: Store, config: Config | None = None, hub: Any = None, sim: Any = None) -> FastAPI:
     config = config or store.config
 
     async def water_loop(interval: float = 60.0) -> None:
@@ -112,15 +112,19 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None) -> F
         import asyncio
 
         task = asyncio.create_task(water_loop())
+        sim_task = asyncio.create_task(app.state.sim.run()) if app.state.sim is not None else None
         try:
             yield
         finally:
             task.cancel()
+            if sim_task is not None:
+                sim_task.cancel()
 
     app = FastAPI(title="SiREN API", version="0.1.0", lifespan=lifespan)
     app.state.store = store
     app.state.config = config
     app.state.hub = hub
+    app.state.sim = sim
 
     def _error(status: int, kind: str, detail: str, allowed: list[Any] | None = None) -> JSONResponse:
         """Error body per contracts/openapi.yaml Error schema."""
@@ -229,6 +233,8 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None) -> F
     def config_put(request: Request, key: str, body: dict = Body(...)) -> dict:
         nonlocal config
         account = _account(request, role="operator")
+        if key == "game.speed":
+            config.validate("game_speed", int(body.get("value", 1)))
         config = config.replaced(key, body.get("value"))
         store.config = config
         app.state.config = config
@@ -630,10 +636,27 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None) -> F
              texts.reporter_location_received(config, inc["id"]), None, inc["id"])
         return inc
 
+    # ---- game mode (dev-only; real mode has no simulator) ----
+
+    @app.post("/game/incident", status_code=201)
+    def game_incident(request: Request) -> dict:
+        if app.state.sim is None:
+            raise NotFound("game mode is not enabled")
+        return app.state.sim.spawn_now()
+
+    @app.get("/game/state")
+    def game_state(request: Request) -> dict:
+        """Dev-only view: is the simulator running, at what speed, how many ticks."""
+        speed = int(config.get("game.speed", 1))
+        if app.state.sim is None:
+            return {"mode": "real", "speed": speed, "ticks": 0, "virtual_now": store.now_iso()}
+        return {"mode": "game", "speed": speed, "ticks": app.state.sim.ticks,
+                "virtual_now": store.now_iso()}
+
     # ---- stats ----
 
     @app.get("/stats/today")
     def stats(request: Request, date: str | None = None) -> dict:
-        return store.stats_today(date=date or today())
+        return store.stats_today(date=date or store.now_iso().split("T")[0])
 
     return app

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SiREN — Petugas</title>
+<link rel="stylesheet" href="/vendor/maplibre-gl.css">
+<link rel="stylesheet" href="/shared/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="logo"><svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><path d="M5 22v-6a9 9 0 0 1 18 0v6z" fill="#ff6b2c"/><rect x="3" y="22" width="22" height="3" rx="1.5" fill="#38bdf8"/><path d="M14 2v3M4 6l2 2M24 6l-2 2" stroke="#fbbf24" stroke-width="2" stroke-linecap="round"/></svg><span>Si<b>REN</b></span></div>
+  <nav class="tabs">
+    <button onclick="location.href='/ops/'">Operator</button>
+    <button class="on">Petugas</button>
+  </nav>
+  <div class="kpis"></div>
+  <div id="clock"></div>
+</header>
+
+<main id="field" class="view on">
+  <div class="phone">
+    <div class="gpsb" id="gps">GPS menunggu…</div>
+    <div><small id="who"></small><div class="big" id="stat">—</div></div>
+    <div class="box">
+      <div id="incinfo"><b>Belum ada tugas</b><br><small>Biarkan halaman ini terbuka agar posisimu terkirim ke operator.</small></div>
+      <div class="minimap" id="fmap"></div>
+      <div class="mini" id="crew"></div>
+    </div>
+    <button class="bigbtn" id="bigbtn" hidden></button>
+    <div class="qa">
+      <button id="waterbtn">Update air<br><small>—</small></button>
+      <button id="roaddr">Jalan tidak muat<br><small>posisi GPS</small></button>
+    </div>
+    <div class="seg" id="seg"></div>
+    <div class="sheet" id="sheet" hidden></div>
+  </div>
+</main>
+
+<div class="login" id="login">
+  <form class="card" id="loginform">
+    <h2>Masuk petugas</h2>
+    <small>Anak kunci dev: <span class="mono">siren-dev</span></small>
+    <div class="row">
+      <select id="lu">
+        <option value="a.asep">a.asep</option><option value="b.budi">b.budi</option>
+        <option value="c.cecep">c.cecep</option><option value="d.dede">d.dede</option>
+        <option value="e.eko">e.eko</option><option value="f.fajar">f.fajar</option>
+      </select>
+      <input id="lp" type="password" value="siren-dev" autocomplete="current-password">
+    </div>
+    <button class="btn go" type="submit">Masuk</button>
+    <small id="lerr" class="warn"></small>
+  </form>
+</div>
+<div id="toast" role="status"></div>
+
+<script src="/vendor/maplibre-gl.js"></script>
+<script type="module">
+import { login, loadSession, ensureSession, rest, connectWS, errText } from '/shared/api.js';
+import { createMap, mapData, applyMap } from '/shared/map.js';
+
+const STC = {
+  Standby: '#34d399', Dispatched: '#fbbf24', EnRoute: '#fb923c', OnScene: '#f43f5e',
+  Returning: '#818cf8', IsiUlang: '#38bdf8', Istirahat: '#94a3b8', Offline: '#566274',
+};
+const ACTIVE = ['Dispatched', 'EnRoute', 'OnScene', 'IsiUlang', 'Returning'];
+const SELF_SET = ['IsiUlang', 'Istirahat'];
+const GPS = { live: ['●', '#34d399'], stale: ['◐', '#fbbf24'], offline: ['○', '#566274'] };
+
+let S = null, cfg = null, ws = null, map = null, sess = null;
+let gameMode = false, sheet = false, ownPos = null, lastPing = 0;
+let clockBase = { server: Date.now(), local: Date.now() };
+const serverNowMs = () => clockBase.server + (Date.now() - clockBase.local) * (gameMode ? Number(c('game.speed') || 1) : 1);
+
+const $ = (s) => document.querySelector(s);
+const c = (key) => key.split('.').reduce((o, p) => o?.[p], cfg);
+const lab = (kind, s) => c(kind)?.[s]?.label ?? s;
+const me = () => S?.members.find((m) => m.id === sess?.member_id);
+const myVeh = () => S?.vehicles.find((v) => v.id === me()?.vehicle_id);
+const myInc = () => {
+  if (!S) return null;
+  const a = S.assignments.find((x) => x.member_id === sess.member_id && ['Dispatched', 'EnRoute', 'OnScene', 'Returning'].includes(x.status));
+  return a ? S.incidents.find((i) => i.id === a.incident_id && ['Dispatched', 'EnRoute', 'OnScene'].includes(i.status)) : null;
+};
+const age = (s) => s == null ? '—' : s < 60 ? Math.round(s) + ' dtk' : Math.round(s / 60) + ' mnt';
+const lvLabel = (v) => c('water_level.options')?.[v]?.label ?? v;
+function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('on'), 2500); }
+
+async function start(s) {
+  sess = s;
+  ws = connectWS('field', s.token, {
+    memberId: () => s.member_id,
+    onEvent: fold,
+    onError: (p) => toast('Server: ' + (p.message || 'error') + (p.allowed?.length ? ' · boleh: ' + p.allowed.join(', ') : '')),
+  });
+  $('#login').remove();
+}
+$('#loginform').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const s = await login('field', $('#lu').value, $('#lp').value);
+    $('#lerr').textContent = '';
+    await start(s);
+  } catch (err) { $('#lerr').textContent = errText(err); }
+});
+const saved = await ensureSession('field');
+if (saved) start(saved);
+
+function fold(ev) {
+  const p = ev.payload || {};
+  if (ev.type === 'snapshot') {
+    S = p; cfg = p.config;
+    clockBase = { server: Date.parse(p.server_ts), local: Date.now() };
+    if (!map) initMap().then(() => paintMap());
+    rest('GET', '/game/state').then((g) => { gameMode = g.mode === 'game'; render(); }).catch(() => { gameMode = false; });
+    render(); return;
+  }
+  if (!S) return;
+  clockBase = { server: Date.parse(ev.ts), local: Date.now() };
+  switch (ev.type) {
+    case 'member.position': {
+      const m = S.members.find((x) => x.id === p.member_id);
+      if (m) { m.position = p.position; m.freshness = p.freshness; m.position_age_seconds = p.position_age_seconds; }
+      if (p.member_id === sess.member_id) ownPos = p.position;
+      const v = S.vehicles.find((x) => x.id === p.vehicle_id); if (v) v.position = p.position;
+      paintMap(); render(); return;
+    }
+    case 'member.status': { const m = S.members.find((x) => x.id === p.member_id); if (m) m.status = p.status; break; }
+    case 'incident.created': S.incidents.push({ ...p.incident, location: p.incident.location ?? { lat: p.incident.lat, lon: p.incident.lon } }); break;
+    case 'incident.updated': { const i = S.incidents.find((x) => x.id === p.incident_id); if (i) Object.assign(i, p.incident, { location: p.incident.location ?? { lat: p.incident.lat, lon: p.incident.lon } }); break; }
+    case 'assignment.updated': for (const a of p.assignments) { const x = S.assignments.find((y) => y.id === a.id); if (x) Object.assign(x, a); else S.assignments.push(a); } break;
+    case 'vehicle.water_level': { const v = S.vehicles.find((x) => x.id === p.vehicle_id); if (v) { v.water_level = p.level; v.water_level_source = p.source; v.water_level_confirmed_at = p.confirmed_at; v.estimated = p.source === 'estimate'; } break; }
+    case 'restriction.reported': if (!S.road_restrictions.some((r) => r.id === p.restriction.id)) S.road_restrictions.push(p.restriction); toast('Jalan tidak muat dilaporkan — menunggu verifikasi operator'); break;
+    case 'config.updated': { let o = cfg; const parts = p.key.split('.'); parts.slice(0, -1).forEach((k) => { o = o[k] ??= {}; }); o[parts.at(-1)] = p.value; break; }
+  }
+  paintMap(); render();
+}
+
+// ---- mini map ----
+async function initMap() {
+  map = await createMap($('#fmap'), { bounds: [[107.65, -7.25], [107.81, -7.08]] });
+  globalThis.__map = map; // dev hook: inspect sources from the console
+  paintMap();
+}
+function paintMap() {
+  if (!map || !S) return;
+  const teamColor = (tid) => S.teams.find((t) => t.id === tid)?.color ?? '#ff9f68';
+  applyMap(map, mapData(S, { vehicleColor: (v) => teamColor(v.team_id), memberColor: (m) => STC[m.status] ?? '#e8edf4' }));
+}
+
+// ---- ping loop ----
+function pingInterval() {
+  const active = ACTIVE.includes(me()?.status);
+  return (active ? c('position.ping_live_seconds') : c('position.ping_standby_seconds')) || 5;
+}
+function jitter(base) {
+  const b = base || S?.stations?.[0] || { lat: -7.218, lon: 107.72 };
+  return { lat: b.lat + (Math.random() - 0.5) * 0.0018, lon: b.lon + (Math.random() - 0.5) * 0.0018, accuracy_m: 25 };
+}
+function ping() {
+  const m = me(); if (!m || !ws) return;
+  const send = (pos) => {
+    ownPos = pos;
+    ws.send('position.ping', { member_id: m.id, vehicle_id: m.vehicle_id ?? null, position: pos });
+    lastPing = Date.now();
+  };
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (p) => send({ lat: p.coords.latitude, lon: p.coords.longitude, accuracy_m: p.coords.accuracy }),
+      () => send(ownPos ? jitter(ownPos) : jitter(myVeh()?.position || m.position)),
+      { timeout: 3000, maximumAge: 0 },
+    );
+  } else {
+    send(ownPos ? jitter(ownPos) : jitter(myVeh()?.position || m.position));
+  }
+}
+setInterval(() => {
+  if (!S || !sess) return;
+  if (Date.now() - lastPing >= pingInterval() * 1000) ping();
+}, 1000);
+
+// ---- actions ----
+$('#bigbtn').addEventListener('click', () => {
+  const m = me(); const target = c('transitions.next_action')?.[m.status];
+  if (target) ws.send('status.set', { member_id: m.id, status: target });
+});
+$('#seg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-v]'); if (!b) return;
+  ws.send('status.set', { member_id: me().id, status: b.dataset.v });
+});
+$('#waterbtn').addEventListener('click', () => { sheet = !sheet; renderSheet(); });
+$('#roaddr').addEventListener('click', async () => {
+  const pos = ownPos || me()?.position || myVeh()?.position || S.stations?.[0];
+  if (!pos) { toast('Posisi belum diketahui'); return; }
+  try {
+    await rest('POST', '/road-restrictions', {
+      kind: 'point',
+      geometry: { kind: 'point', coordinates: [[pos.lat, pos.lon]] },
+      reason: 'narrow',
+      affected_vehicle_type: myVeh()?.vehicle_type || 'truck',
+    });
+  } catch (err) { toast(errText(err)); }
+});
+function renderSheet() {
+  const v = myVeh();
+  const opts = (c('water_level.options') || []).slice().reverse();
+  $('#sheet').hidden = !sheet;
+  $('#sheet').innerHTML = sheet
+    ? `<b>Air di ${v?.name ?? 'kendaraan'} sekarang?</b>` + opts.map((o) => `<button data-lv="${o.value}">${o.label}</button>`).join('')
+      + (v?.status === 'IsiUlang' ? '<button data-refill="1">Isi ulang selesai</button>' : '')
+      + '<button data-cancel="1" style="color:var(--mu)">Batal</button>'
+    : '';
+}
+$('#sheet').addEventListener('click', async (e) => {
+  const el = e.target.closest('button'); if (!el) return;
+  if (el.dataset.cancel) { sheet = false; renderSheet(); return; }
+  if (el.dataset.refill) {
+    try { await rest('POST', `/vehicles/${myVeh().id}/refill-done`, { confirmed: true }); toast('Air penuh — isi ulang selesai'); }
+    catch (err) { toast(errText(err)); }
+    sheet = false; renderSheet(); return;
+  }
+  if (el.dataset.lv) {
+    try { await rest('POST', `/vehicles/${myVeh().id}/water-level`, { level: +el.dataset.lv, source: 'officer' }); toast(`Air ${lvLabel(+el.dataset.lv)} terkirim ke pos`); }
+    catch (err) { toast(errText(err)); }
+    sheet = false; renderSheet(); return;
+  }
+});
+
+// ---- render ----
+function render() {
+  if (!S || !sess) return;
+  const m = me(); if (!m) return;
+  const v = myVeh();
+  const i = myInc();
+  const g = GPS[m.freshness] ?? GPS.offline;
+  $('#gps').style.setProperty('--c', g[1]);
+  $('#gps').textContent = `${g[0]} GPS ${m.freshness} · posisi ${age(m.position_age_seconds)} lalu${m.position?.accuracy_m ? ` · akurasi ${Math.round(m.position.accuracy_m)} m` : ''} · layar tetap menyala (Wake Lock)`;
+  $('#who').textContent = `${m.name} · ${S.teams.find((t) => t.id === m.team_id)?.name ?? m.team_id} · ${v?.name ?? 'tanpa kendaraan'}`;
+  $('#stat').textContent = lab('member_status', m.status);
+  $('#stat').style.setProperty('--c', `var(--st-${m.status})`);
+  $('#incinfo').innerHTML = i
+    ? `<b style="font-size:16px">${i.id} · ${i.type}</b><br><small>${i.address ?? ''}${v?.eta_minutes != null ? ' · ETA ' + Math.round(v.eta_minutes) + ' mnt' : ''}</small>`
+    : '<b>Belum ada tugas</b><br><small>Biarkan halaman ini terbuka agar posisimu terkirim ke operator.</small>';
+  $('#crew').innerHTML = i
+    ? S.assignments.filter((a) => a.incident_id === i.id && ['Dispatched', 'EnRoute', 'OnScene', 'Returning'].includes(a.status))
+      .map((a) => { const x = S.members.find((mm) => mm.id === a.member_id); return x ? `<span class="chip" style="--c:var(--st-${x.status})">${x.name} · ${lab('member_status', x.status)}</span>` : ''; }).join('')
+    : '';
+  const target = c('transitions.next_action')?.[m.status];
+  $('#bigbtn').hidden = !target;
+  if (target) $('#bigbtn').textContent = c('transitions.next_action_label')?.[target] ?? lab('member_status', target);
+  $('#waterbtn').innerHTML = `Update air<br><small>${lvLabel(v?.water_level ?? 0)} · ${v?.water_level_confirmed_at ? age((serverNowMs() - Date.parse(v.water_level_confirmed_at)) / 1000) : 'belum ada bacaan'}</small>`;
+  $('#seg').innerHTML = SELF_SET.map((s) => `<button data-v="${s}" class="${m.status === s ? 'on' : ''}" style="--c:var(--st-${s})">${lab('member_status', s)}</button>`).join('');
+  renderSheet();
+}
+setInterval(() => {
+  if (!S) return;
+  $('#clock').textContent = new Date(serverNowMs()).toISOString().slice(11, 19);
+}, 1000);
+</script>
+</body>
+</html>

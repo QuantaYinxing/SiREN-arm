@@ -1,0 +1,32 @@
+{
+  "type": "FeatureCollection",
+  "name": "SiREN basemap schematic (Garut area, offline)",
+  "features": [
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": "Jl. Garuda"},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.102], [107.7925, -7.102]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": true, "name": "Jl. Cikurubuk"},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.13], [107.7925, -7.13]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": "Jl. Sutisna Senjaya"},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.154], [107.7925, -7.154]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": true, "name": "Jl. Cihideung"},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.186], [107.7925, -7.186]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": ""},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.214], [107.7925, -7.214]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": ""},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.24], [107.7925, -7.24]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": "Tandon Kodim"},
+     "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.24], [107.6625, -7.10]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": true, "name": "Jl. Pos Damkar"},
+     "geometry": {"type": "LineString", "coordinates": [[107.7025, -7.24], [107.7025, -7.10]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": ""},
+     "geometry": {"type": "LineString", "coordinates": [[107.7225, -7.24], [107.7225, -7.10]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": true, "name": "Jl. Pasar Cikurubuk"},
+     "geometry": {"type": "LineString", "coordinates": [[107.75, -7.24], [107.75, -7.10]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": ""},
+     "geometry": {"type": "LineString", "coordinates": [[107.77, -7.24], [107.77, -7.10]]}},
+    {"type": "Feature", "properties": {"kind": "road", "major": false, "name": ""},
+     "geometry": {"type": "LineString", "coordinates": [[107.7925, -7.24], [107.7925, -7.10]]}},
+    {"type": "Feature", "properties": {"kind": "river", "name": "Ciwulan"},
+     "geometry": {"type": "LineString", "coordinates": [[107.80, -7.09], [107.783, -7.135], [107.7925, -7.182], [107.762, -7.212], [107.72, -7.248]]}}
+  ]
+}

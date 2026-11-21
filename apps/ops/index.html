@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SiREN — Operator</title>
+<link rel="stylesheet" href="/vendor/maplibre-gl.css">
+<link rel="stylesheet" href="/shared/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="logo"><svg width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><path d="M5 22v-6a9 9 0 0 1 18 0v6z" fill="#ff6b2c"/><rect x="3" y="22" width="22" height="3" rx="1.5" fill="#38bdf8"/><path d="M14 2v3M4 6l2 2M24 6l-2 2" stroke="#fbbf24" stroke-width="2" stroke-linecap="round"/></svg><span>Si<b>REN</b></span></div>
+  <nav class="tabs">
+    <button class="on">Operator</button>
+    <button onclick="location.href='/field/'">Petugas</button>
+  </nav>
+  <div class="speed" id="speed"></div>
+  <div class="kpis" id="kpis"></div>
+  <div id="clock"></div>
+</header>
+
+<main id="ops" class="view on">
+  <aside id="r1" class="rail"></aside>
+  <section class="center">
+    <div class="mapw" id="mapw">
+      <div id="map"></div>
+      <div class="tool glass" id="tl"></div>
+      <div class="tool glass" id="zm"></div>
+      <div class="legend glass" id="lgd"></div>
+      <div class="dc glass" id="dc"></div>
+    </div>
+    <div class="dock"><div class="bt" id="bt"></div><div id="bc"></div></div>
+  </section>
+  <aside id="r2" class="rail"></aside>
+</main>
+
+<div class="login" id="login">
+  <form class="card" id="loginform">
+    <h2>Masuk operator</h2>
+    <small>Anak kunci dev: <span class="mono">siren-dev</span></small>
+    <div class="row"><input id="lu" value="operator" autocomplete="username"><input id="lp" type="password" value="siren-dev" autocomplete="current-password"></div>
+    <button class="btn go" type="submit">Masuk</button>
+    <small id="lerr" class="warn"></small>
+  </form>
+</div>
+<div id="toast" role="status"></div>
+
+<script src="/vendor/maplibre-gl.js"></script>
+<script type="module">
+import { login, loadSession, ensureSession, rest, connectWS, errText } from '/shared/api.js';
+import { createMap, mapData, applyMap } from '/shared/map.js';
+
+// UI palette per canonical enum value (colors are UI-only; labels come from config).
+const STC = {
+  Standby: '#34d399', Dispatched: '#fbbf24', EnRoute: '#fb923c', OnScene: '#f43f5e',
+  Returning: '#818cf8', IsiUlang: '#38bdf8', Istirahat: '#94a3b8', Offline: '#566274',
+  Baru: '#e879f9', Selesai: '#566274', Dibatalkan: '#566274',
+  verified: '#34d399', pending: '#fbbf24', rejected: '#566274', expired: '#566274',
+};
+Object.entries(STC).forEach(([k, v]) => document.documentElement.style.setProperty('--st-' + k, v));
+
+const ACTIVE = ['Baru', 'Dispatched', 'EnRoute', 'OnScene', 'Returning'];
+let S = null, cfg = null, ws = null, map = null;
+let gameMode = false; // dev signal from GET /game/state — SIREN_MODE env is not in the config dump
+let sel = { inc: null, m: new Set(), w: null, tab: 'inc' };
+let ui = { dmin: false };
+let reco = null, preview = null, previewTimer = null, vehTimer = null;
+let clockBase = { server: Date.now(), local: Date.now() };
+
+const $ = (s) => document.querySelector(s);
+const member = (id) => S.members.find((x) => x.id === id);
+const veh = (id) => S.vehicles.find((x) => x.id === id);
+const water = (id) => S.water_sources.find((x) => x.id === id);
+const inc = (id) => S.incidents.find((x) => x.id === id);
+const active = () => S.incidents.filter((i) => ACTIVE.includes(i.status));
+const pending = () => S.road_restrictions.filter((r) => r.status === 'pending');
+const c = (key) => key.split('.').reduce((o, p) => o?.[p], cfg);
+const lab = (kind, s) => c(kind)?.[s]?.label ?? s;
+const fk = (n) => Number(n).toFixed(1).replace('.', ',');
+const age = (s) => s == null ? '—' : s < 60 ? Math.round(s) + ' dtk' : Math.round(s / 60) + ' mnt';
+const hhmm = (iso) => (iso || '').slice(11, 19);
+const lvLabel = (v) => c('water_level.options')?.[v]?.label ?? v;
+const serverNowMs = () => clockBase.server + (Date.now() - clockBase.local) * (gameMode ? Number(c('game.speed') || 1) : 1);
+const chip = (kind, s, x = '') => `<span class="chip" style="--c:var(--st-${s})">${lab(kind, s)}${x ? ' · ' + x : ''}</span>`;
+function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('on'), 2500); }
+function setPath(obj, key, value) { const parts = key.split('.'); let o = obj; for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]] ??= {}; o[parts.at(-1)] = value; }
+
+// ---- boot ----
+async function start(sess) {
+  ws = connectWS('ops', sess.token, {
+    onEvent: fold,
+    onError: (p) => toast('Server: ' + (p.message || 'error') + (p.allowed?.length ? ' · boleh: ' + p.allowed.join(', ') : '')),
+  });
+  $('#login').remove();
+}
+$('#loginform').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const sess = await login('ops', $('#lu').value.trim(), $('#lp').value);
+    $('#lerr').textContent = '';
+    await start(sess);
+  } catch (err) { $('#lerr').textContent = errText(err); }
+});
+const saved = await ensureSession('ops');
+if (saved) start(saved);
+
+function applySnapshot(p) {
+  S = p; cfg = p.config;
+  clockBase = { server: Date.parse(p.server_ts), local: Date.now() };
+  if (!map) initMap().then(() => paintMap());
+  rest('GET', '/game/state').then((g) => { gameMode = g.mode === 'game'; render(); }).catch(() => { gameMode = false; });
+  render(); paintMap();
+}
+
+function fold(ev) {
+  const p = ev.payload || {};
+  if (ev.type === 'snapshot') { applySnapshot(p); return; }
+  if (!S) return;
+  clockBase = { server: Date.parse(ev.ts), local: Date.now() };
+  switch (ev.type) {
+    case 'incident.created': S.incidents.push(normInc(p.incident)); break;
+    case 'incident.updated': upsert(S.incidents, normInc(p.incident)); if (sel.inc === p.incident_id && p.status === 'Dispatched') { sel.inc = null; sel.m.clear(); sel.w = null; reco = null; preview = null; } break;
+    case 'assignment.updated': for (const a of p.assignments) upsert(S.assignments, a); refreshVehicles(); if (sel.inc === p.incident_id) { sel.inc = null; sel.m.clear(); sel.w = null; reco = null; preview = null; } break;
+    case 'member.status': { const m = member(p.member_id); if (m) m.status = p.status; refreshVehicles(); break; }
+    case 'member.position': {
+      const m = member(p.member_id);
+      if (m) { m.position = p.position; m.freshness = p.freshness; m.position_age_seconds = p.position_age_seconds; }
+      const v = p.vehicle_id && veh(p.vehicle_id); if (v) v.position = p.position;
+      paintMap(); render(); return;
+    }
+    case 'vehicle.water_level': { const v = veh(p.vehicle_id); if (v) { v.water_level = p.level; v.water_level_source = p.source; v.water_level_confirmed_at = p.confirmed_at; v.estimated = p.source === 'estimate'; } break; }
+    case 'restriction.reported': upsert(S.road_restrictions, p.restriction); break;
+    case 'restriction.updated': upsert(S.road_restrictions, p.restriction); break;
+    case 'waterSource.updated': if (p.removed) S.water_sources = S.water_sources.filter((w) => w.id !== p.water_source.id); else upsert(S.water_sources, p.water_source); break;
+    case 'config.updated': setPath(cfg, p.key, p.value); break;
+  }
+  if (ev.type !== 'member.position') logLine(ev);
+  render(); paintMap();
+}
+
+function logLine(ev) {
+  const p = ev.payload || {};
+  const text = ({
+    'incident.created': () => `${p.incident.id} ${p.incident.type}${p.incident.address ? ' · ' + p.incident.address : ''}`,
+    'incident.updated': () => `${p.incident_id}: ${lab('incident_status', p.status)}`,
+    'assignment.updated': () => `${p.incident_id} → ${p.vehicle_id ? veh(p.vehicle_id)?.name : 'tanpa kendaraan'}${p.water_source_id ? ' · air: ' + water(p.water_source_id)?.name : ''}`,
+    'member.status': () => `${member(p.member_id)?.name ?? p.member_id}: ${lab('member_status', p.status)}`,
+    'vehicle.water_level': () => `${veh(p.vehicle_id)?.name ?? p.vehicle_id} ${lvLabel(p.level)} (${p.source})`,
+    'restriction.reported': () => `${lab('restriction_reason', p.restriction.reason)} (menunggu verifikasi)`,
+    'restriction.updated': () => `pembatasan ${p.restriction_id} → ${lab('restriction_status', p.status)}`,
+    'config.updated': () => `konfigurasi ${p.key} = ${JSON.stringify(p.value)}`,
+  })[ev.type]?.() ?? ev.type;
+  S.event_log.unshift({ ts: ev.ts, type: ev.type, text });
+  if (S.event_log.length > 120) S.event_log.length = 120;
+}
+
+function upsert(arr, row) {
+  const i = arr.findIndex((x) => x.id === row.id);
+  if (i >= 0) arr[i] = row; else arr.push(row);
+}
+// REST/event incident rows carry lat/lon; snapshot rows carry location — unify.
+const normInc = (i) => ({ ...i, location: i.location ?? { lat: i.lat, lon: i.lon } });
+async function refreshVehicles() {
+  clearTimeout(vehTimer);
+  vehTimer = setTimeout(async () => {
+    try { S.vehicles = await rest('GET', '/vehicles'); paintMap(); render(); } catch { /* WS still authoritative */ }
+  }, 700);
+}
+
+// ---- dispatch domain ----
+function pickVeh(ms) {
+  const teams = new Set(ms.map((m) => m.team_id));
+  const free = S.vehicles.filter((v) => v.status === 'Standby');
+  const own = ms.find((m) => m.vehicle_id && free.some((v) => v.id === m.vehicle_id));
+  if (own) return free.find((v) => v.id === own.vehicle_id);
+  return free.find((v) => teams.has(v.team_id)) || free[0] || null;
+}
+function chosenWater() {
+  if (sel.w === 'none') return null;
+  const opts = reco?.options || [];
+  if (sel.w) return opts.some((o) => o.water_source_id === sel.w) ? sel.w : (water(sel.w)?.status === 'active' ? sel.w : null);
+  return opts[0]?.water_source_id || null;
+}
+function prev() {
+  if (!S) return null;
+  const i = inc(sel.inc); if (!i || !ACTIVE.includes(i.status)) return null;
+  const ms = [...sel.m].map(member);
+  const v = pickVeh(ms);
+  const w = chosenWater();
+  const warns = [];
+  if (ms.length && !v) warns.push('Tidak ada kendaraan siaga — anggota berangkat tanpa kendaraan.');
+  if (v && ms.length && ms.some((m) => m.vehicle_id && m.vehicle_id !== v.id)) warns.push(`Kendaraan regu sedang bertugas — dipakai ${v.name}.`);
+  if (new Set(ms.map((m) => m.team_id)).size > 1) warns.push('Anggota berasal dari dua regu.');
+  ms.filter((m) => m.status !== 'Standby').forEach((m) => warns.push(`${m.name} sedang ${lab('member_status', m.status)} — tugas lama diganti.`));
+  ms.filter((m) => m.freshness !== 'live').forEach((m) => warns.push(`Posisi ${m.name} ${age(m.position_age_seconds)} lalu.`));
+  return { inc: i, ms, veh: v, w, rc: reco?.options || [], warns };
+}
+async function refreshReco() {
+  const P = prev();
+  if (!P || !P.veh) { reco = null; schedulePreview(); render(); return; }
+  try { reco = await rest('POST', '/routing/water-source-options', { vehicle_id: P.veh.id, incident_id: P.inc.id }); }
+  catch (err) { toast(errText(err)); reco = null; }
+  schedulePreview(); render();
+}
+function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(fetchPreview, 250); }
+async function fetchPreview() {
+  const P = prev();
+  if (!P || !P.veh) { preview = null; paintMap(); return; }
+  try {
+    preview = await rest('POST', '/routing/route', { vehicle_id: P.veh.id, to: P.inc.location, via_water_source_id: P.w });
+    paintMap();
+  } catch (err) { preview = null; toast(errText(err)); paintMap(); }
+}
+async function send() {
+  const P = prev();
+  if (!P || !P.ms.length) return;
+  const ids = P.ms.map((m) => m.id);
+  try {
+    const r = await rest('POST', `/incidents/${P.inc.id}/assignments`, { members: ids, vehicle_id: P.veh?.id ?? null, water_source_id: P.w ?? null });
+    toast(`${P.inc.id} dikirim · ${ids.length} anggota`);
+    (r.warnings || []).forEach((w) => toast('⚠ ' + w));
+  } catch (err) { toast(errText(err)); return; }
+  sel.inc = null; sel.m.clear(); sel.w = null; reco = null; preview = null;
+  render(); paintMap();
+}
+async function reporterLink() {
+  try { const r = await rest('POST', `/incidents/${sel.inc}/reporter-link`, {}); toast('Tautan pelapor: ' + r.url); }
+  catch (err) { toast(errText(err)); }
+}
+async function gameIncident() {
+  try { const r = await rest('POST', '/game/incident', {}); toast(`Laporan baru: ${r.id}`); }
+  catch (err) { toast(errText(err)); }
+}
+async function setSpeed(v) {
+  try { await rest('PUT', '/config/game.speed', { value: v }); } catch (err) { toast(errText(err)); }
+}
+async function verify(id, status) {
+  try { await rest('POST', `/road-restrictions/${id}/verify`, { status }); } catch (err) { toast(errText(err)); }
+}
+
+// ---- map ----
+const teamColor = (tid) => S.teams.find((t) => t.id === tid)?.color ?? '#ff9f68';
+async function initMap() {
+  map = await createMap($('#map'));
+  globalThis.__map = map; // dev hook: inspect sources from the console
+  map.on('click', 'incident-dot', (e) => { const id = e.features?.[0]?.properties?.id; if (id) { sel.inc = sel.inc === id ? null : id; sel.m.clear(); sel.w = null; reco = null; preview = null; ui.dmin = false; refreshReco(); } });
+  map.on('click', 'water-dot', (e) => { const id = e.features?.[0]?.properties?.id; if (sel.inc && id && !id.includes(':ap')) { sel.w = sel.w === id ? null : id; schedulePreview(); render(); } });
+  map.on('mouseenter', 'incident-dot', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'incident-dot', () => { map.getCanvas().style.cursor = ''; });
+}
+function paintMap() {
+  if (!map || !S) return;
+  const route = { legs: [] };
+  if (preview) {
+    const vc = teamColor(preview.vehicle_id && veh(preview.vehicle_id)?.team_id);
+    preview.legs.forEach((leg, i) => route.legs.push({ geometry: leg.geometry, color: i === 0 && preview.legs.length > 1 ? '#38bdf8' : vc }));
+  }
+  for (const a of S.assignments) {
+    if (!a.vehicle_id || !['Dispatched', 'EnRoute', 'OnScene', 'Returning'].includes(a.status)) continue;
+    const v = veh(a.vehicle_id), i = inc(a.incident_id);
+    if (!v?.position || !i || ACTIVE.includes(i.status) === false) continue;
+    const via = a.water_source_id && water(a.water_source_id)?.location;
+    const pts = [v.position]; if (via) pts.push(via); pts.push(i.location);
+    route.legs.push({ geometry: pts.map((p) => [p.lat, p.lon]), color: teamColor(v.team_id) });
+  }
+  applyMap(map, mapData(S, { inc: sel.inc, water: chosenWater(), route, vehicleColor: (v) => teamColor(v.team_id), memberColor: (m) => STC[m.status] }));
+}
+
+// ---- components ----
+const kpis = () => {
+  const st = S.stats_today;
+  const standbyV = S.vehicles.filter((v) => v.status === 'Standby').length;
+  const standbyM = S.members.filter((m) => m.status === 'Standby').length;
+  const busyM = S.members.filter((m) => !['Standby', 'Offline', 'Istirahat'].includes(m.status)).length;
+  const liveG = S.members.filter((m) => m.freshness === 'live').length;
+  const avgWater = Math.round(S.vehicles.reduce((s, v) => s + v.water_level, 0) / Math.max(1, (c('water_level.options')?.length ?? 5) - 1) * 100);
+  const low = S.vehicles.filter((v) => v.water_level <= (c('water.low_level_threshold') ?? 1)).length;
+  const items = [
+    { l: 'Insiden aktif', v: st.incidents_active, s: `${st.incidents_finished} selesai`, k: 'var(--acc)' },
+    { l: 'Unit siaga', v: `${standbyV}/${S.vehicles.length}`, s: `${S.vehicles.length - standbyV} bertugas`, k: 'var(--st-Standby)' },
+    { l: 'Anggota siaga', v: `${standbyM}/${S.members.length}`, s: `${busyM} bertugas` },
+    { l: 'Jarak total', v: fk(st.km_total) + ' km', s: 'hari ini' },
+    { l: 'Resp. rata²', v: st.avg_response_minutes == null ? '—' : fk(st.avg_response_minutes) + ' mnt', s: 'dispatch → tiba' },
+    { l: 'Isi ulang', v: st.refills, s: 'hari ini', k: 'var(--wat)' },
+    { l: 'GPS live', v: `${liveG}/${S.members.length}`, s: `${S.members.length - liveG} basi/off`, k: liveG === S.members.length ? 'var(--st-Standby)' : 'var(--st-Dispatched)' },
+    { l: 'Air rata²', v: avgWater + '%', s: `${low} rendah`, k: 'var(--wat)' },
+  ];
+  return items.map((k) => `<div class="kpi" style="--k:${k.k || 'var(--ink)'}"><b>${k.v}</b><small>${k.l} · ${k.s}</small></div>`).join('');
+};
+const vehCard = (v) => `<div class="veh" style="--c:var(--st-${v.status});--vc:${teamColor(v.team_id)}">
+  <div class="row"><b>${v.name}</b><small class="mono">${v.plate ?? ''}</small></div>
+  <div class="ban">${lab('vehicle_status', v.status)}${v.eta_minutes != null ? ` · ETA ${Math.round(v.eta_minutes)} mnt` : ''}</div>
+  <div class="gauge" aria-label="Air ${lvLabel(v.water_level)}">${c('water_level.options').slice(1).map((_, i) => `<i class="${i < v.water_level ? 'f' : ''}"></i>`).join('')}</div>
+  <div class="row"><small>Air ${lvLabel(v.water_level)} · ${v.estimated ? 'estimasi' : lab('water_level.reading_sources', v.water_level_source)} · ${v.water_level_confirmed_at ? age((serverNowMs() - Date.parse(v.water_level_confirmed_at)) / 1000) : 'belum ada bacaan'}</small><small class="mono">${fk(v.km_today)} km</small></div>
+</div>`;
+const memCard = (m) => {
+  const g = { live: ['●', '#34d399'], stale: ['◐', '#fbbf24'], offline: ['○', '#566274'] }[m.freshness];
+  return `<button class="mem${sel.m.has(m.id) ? ' sel' : ''}" data-a="m" data-id="${m.id}" style="--c:var(--st-${m.status})">
+    <span class="av">${m.id}</span>
+    <span><b>${m.name}</b> <small>${lab('roles_member', m.role) || m.role}</small><br><small class="st"><i class="dot"></i>${lab('member_status', m.status)}</small></span>
+    <small style="color:${g[1]}" title="GPS ${m.freshness}">${g[0]} ${age(m.position_age_seconds)}</small>
+  </button>`;
+};
+function railHTML(t) {
+  const vs = S.vehicles.filter((v) => v.team_id === t.id);
+  const ms = S.members.filter((m) => m.team_id === t.id);
+  return `<div class="rh"><b>${t.name}</b><small>${ms.filter((m) => m.status === 'Standby').length}/${ms.length} siaga</small></div>${vs.map(vehCard).join('')}${ms.map(memCard).join('')}`;
+}
+function dcard() {
+  const P = prev(); if (!P) return '';
+  const { inc: i, ms, veh: v, w, warns } = P;
+  if (ui.dmin) return `<button class="pill" data-a="dmin">▲ ${i.id} · ${ms.length} anggota${preview ? ` · ${Math.round(preview.total_minutes)} mnt` : ''}</button>`;
+  return `<div class="row" style="align-items:flex-start"><div><b style="font-size:15px">${i.id}</b> ${chip('incident_status', i.status)}<br><small>${i.type} · ${i.address ?? ''}</small></div>
+    <div><button class="ib" data-a="dmin" title="Kecilkan">–</button><button class="ib" data-a="dclose" title="Tutup (Esc)">✕</button></div></div>
+  <div class="mini">${ms.length ? ms.map((m) => `<span class="chip" style="--c:var(--st-Dispatched)">${m.name}</span>`).join('') : '<small>Klik kartu anggota di sisi untuk menugaskan.</small>'}</div>
+  <div class="mini">${S.teams.map((t) => `<button class="btn" data-a="team" data-id="${t.id}">Kirim ${t.name}</button>`).join('')}${i.status === 'Baru' ? '<button class="btn" data-a="link">Tautan pelapor</button>' : ''}</div>
+  ${warns.map((x) => `<div class="warn">⚠ ${x}</div>`).join('')}
+  ${ms.length && v ? `<div class="box"><small>${v.name}${w ? ' → ' + water(w)?.name : ''} → lokasi</small><div class="row"><span class="bignum">${preview ? Math.round(preview.total_minutes) + (preview.refill_minutes ? ` <small>+${Math.round(preview.refill_minutes)} isi ulang</small>` : '') : '—'} <small>mnt</small></span><span class="mono">${preview ? fk(preview.total_km) + ' km' : ''}</span><button class="btn" data-a="tab" data-v="air">Ganti air</button></div></div>` : ''}
+  <button class="btn go" data-a="send"${ms.length ? '' : ' disabled'}>Kirim</button>`;
+}
+const rowHTML = (cols, inner, attr = '', cls = '') => `<${attr ? 'button' : 'div'} class="rw ${cls}" ${attr} style="--cols:${cols}">${inner}</${attr ? 'button' : 'div'}>`;
+const bar = (l, v, max, colr, t) => `<div class="br"><small>${l}</small><div class="tr"><i style="width:${max ? Math.min(100, v / max * 100) : 0}%;background:${colr}"></i></div><b class="mono">${t}</b></div>`;
+const tally = (a, f) => a.reduce((o, x) => { const k = f(x); o[k] = (o[k] || 0) + 1; return o; }, {});
+const DOCK = [
+  { k: 'inc', l: 'Insiden', n: () => active().length, c: 'var(--st-OnScene)', r: () => S.incidents.map((i) => {
+    const a = S.assignments.filter((x) => x.incident_id === i.id && ACTIVE.includes(x.status));
+    const v = a[0]?.vehicle_id && veh(a[0].vehicle_id);
+    return rowHTML('64px 1.2fr 130px 1.4fr 52px', `<b class="num">${i.id}</b><span>${i.type}<br><small>${i.address ?? ''}</small></span>${chip('incident_status', i.status)}<small>${a.length ? `${v ? v.name : 'tanpa kendaraan'} · ${a.map((x) => member(x.member_id)?.name).join(', ')}` : 'Belum ditugaskan'}</small><small class="mono">${hhmm(i.created_at)}</small>`, `data-a="inc" data-id="${i.id}"`, sel.inc === i.id ? 'sel' : '');
+  }).join('') },
+  { k: 'air', l: 'Rekomendasi air', r: () => {
+    const P = prev();
+    if (!P) return '<small>Pilih insiden untuk melihat rekomendasi titik air.</small>';
+    if (!P.veh) return '<small>Tidak ada kendaraan siaga.</small>';
+    if (!reco) return '<small>Memuat rekomendasi…</small>';
+    return `<small>${P.veh.name} · air ${lvLabel(reco.water_level)} · ${reco.refill_required ? 'tangki rendah: skor = A + isi ulang + B, isi ulang dulu' : 'tangki cukup: skor = B (terdekat ke lokasi)'}. A = kendaraan → sumber, B = sumber → lokasi.</small>` +
+      reco.options.map((o) => rowHTML('28px 1.4fr 1fr 1fr 1fr 70px', `<b class="num">#${o.rank}</b><span><b>${o.name}</b><br><small>${lab('water_source_types', o.type)} · ${water(o.water_source_id)?.capacity_note ?? ''}</small></span><span>A ${Math.round(o.a.minutes)} mnt<br><small>${fk(o.a.km)} km</small></span><span>B ${Math.round(o.b.minutes)} mnt<br><small>${fk(o.b.km)} km</small></span><span class="num">${o.score_minutes} mnt${o.refill_required ? ' <small>+isi ulang</small>' : ''}</span><small>${chosenWater() === o.water_source_id ? 'Dipakai' : 'Pilih'}</small>`, `data-a="w" data-id="${o.water_source_id}"`, chosenWater() === o.water_source_id ? 'sel' : '')).join('') +
+      `<button class="btn" data-a="w" data-id="none" style="margin-top:8px">Tanpa titik air</button>`;
+  } },
+  { k: 'res', l: 'Pembatasan jalan', n: () => pending().length, c: 'var(--st-Dispatched)', r: () => S.road_restrictions.map((r) => {
+    const by = r.reported_by || (r.reported_member_id && member(r.reported_member_id)?.name) || 'Operator';
+    const kindChip = r.status === 'verified' ? 'OnScene' : r.status === 'pending' ? 'Dispatched' : 'Offline';
+    return rowHTML('1fr 130px 90px 160px', `<span>${lab('restriction_reason', r.reason)}${r.note ? ' · ' + r.note : ''}<br><small>oleh ${by} · ${hhmm(r.reported_at)} · untuk ${lab('restriction_affects', r.affected_vehicle_type)}</small></span><span class="chip" style="--c:var(--st-${kindChip})">${lab('restriction_status', r.status)}</span><span></span><span>${r.status === 'pending' ? `<button class="btn" data-a="vr" data-id="${r.id}">Verifikasi</button> <button class="btn" data-a="rj" data-id="${r.id}">Tolak</button>` : ''}</span>`);
+  }).join('') },
+  { k: 'stat', l: 'Statistik', r: () => {
+    const mx = Math.max(1, ...S.vehicles.map((v) => v.km_today));
+    const cnt = tally(S.members, (m) => m.status);
+    const typ = tally(S.incidents, (i) => i.type);
+    return `<div class="sg">
+    <div class="box"><h4>Jarak per unit</h4>${S.vehicles.map((v) => bar(v.name, v.km_today, mx, teamColor(v.team_id), fk(v.km_today) + ' km')).join('')}</div>
+    <div class="box"><h4>Air per unit</h4>${S.vehicles.map((v) => bar(v.name, v.water_level, (c('water_level.options')?.length ?? 5) - 1, 'var(--wat)', lvLabel(v.water_level))).join('')}</div>
+    <div class="box"><h4>Status anggota</h4><div class="stk">${Object.entries(cnt).map(([s, n]) => `<i style="flex:${n};background:var(--st-${s})"></i>`).join('')}</div><div class="lg">${Object.entries(cnt).map(([s, n]) => chip('member_status', s, n)).join('')}</div></div>
+    <div class="box"><h4>Siaga per regu</h4>${S.teams.map((t) => { const ms = S.members.filter((m) => m.team_id === t.id); const n = ms.filter((m) => m.status === 'Standby').length; return bar(t.name, n, ms.length, 'var(--st-Standby)', `${n}/${ms.length}`); }).join('')}</div>
+    <div class="box"><h4>Insiden per jenis</h4>${Object.entries(typ).map(([t, n]) => bar(t, n, S.incidents.length, 'var(--acc)', n)).join('')}</div></div>`;
+  } },
+  { k: 'log', l: 'Log kejadian', r: () => S.event_log.map((l) => rowHTML('76px 170px 1fr', `<small class="mono">${hhmm(l.ts)}</small><span class="mono" style="color:var(--wat)">${l.type}</span><span>${l.text}</span>`)).join('') },
+];
+function render() {
+  if (!S) return;
+  const game = gameMode;
+  $('#speed').innerHTML = game ? (c('game_speed') || [1, 2, 4, 8]).map((v) => `<button data-a="speed" data-v="${v}" class="${c('game.speed') === v ? 'on' : ''}">${v}x</button>`).join('') : '';
+  $('#tl').innerHTML = [['hl', '◧', 'Regu 1', '1'], ['hr', '◨', 'Regu 2', '2'], ['hb', '⬓', 'Dock', '3'], ['fx', '⤢', 'Fokus', 'F']]
+    .map(([k, i, l, key]) => `<button data-a="panel" data-v="${k}" aria-pressed="${k === 'fx' ? $('#ops').classList.contains(k) : !$('#ops').classList.contains(k)}" title="${l}">${i} ${l}<kbd>${key}</kbd></button>`).join('')
+    + (game ? '<button data-a="ginc">Buat laporan</button>' : '');
+  $('#zm').innerHTML = '<button data-a="zin" aria-label="Zoom in">+</button><button data-a="zout" aria-label="Zoom out">−</button>';
+  $('#lgd').innerHTML = [['Insiden', '#fb923c', 'dot'], ['Titik air', '#38bdf8', 'rot'], ['Pembatasan', '#f43f5e', 'sq']]
+    .map(([l, col, s]) => `<span><i style="background:${s === 'sq' ? `repeating-linear-gradient(45deg,${col} 0 2px,transparent 2px 5px)` : col};${s === 'dot' ? 'border-radius:50%' : s === 'rot' ? 'transform:rotate(45deg)' : ''}"></i>${l}</span>`).join('');
+  $('#kpis').innerHTML = kpis();
+  $('#r1').innerHTML = railHTML(S.teams[0]);
+  $('#r2').innerHTML = railHTML(S.teams[1]);
+  const dc = $('#dc'); dc.innerHTML = dcard(); dc.classList.toggle('min', ui.dmin);
+  $('#bt').innerHTML = DOCK.map((t) => `<button data-a="tab" data-v="${t.k}" class="${sel.tab === t.k ? 'on' : ''}">${t.l}${t.n && t.n() ? `<em style="--c:${t.c || 'var(--acc)'}">${t.n()}</em>` : ''}</button>`).join('') + '<span class="sp"></span><button class="ib" data-a="panel" data-v="hb" title="Lipat dock (3)" style="height:28px;padding:0">⌄</button>';
+  $('#bc').innerHTML = DOCK.find((t) => t.k === sel.tab).r();
+}
+
+// ---- actions ----
+const ACT = {
+  tab: (_, v) => { sel.tab = v; $('#ops').classList.remove('hb'); },
+  panel: (_, v) => $('#ops').classList.toggle(v),
+  zin: () => { map?.zoomIn(); return 0; },
+  zout: () => { map?.zoomOut(); return 0; },
+  inc: (id) => { sel.inc = sel.inc === id ? null : id; sel.m.clear(); sel.w = null; reco = null; preview = null; ui.dmin = false; refreshReco(); },
+  dmin: () => { ui.dmin = !ui.dmin; },
+  dclose: () => { sel.inc = null; sel.m.clear(); sel.w = null; reco = null; preview = null; },
+  m: (id) => { if (!sel.inc) { toast('Pilih insiden dulu'); return 0; } sel.m.has(id) ? sel.m.delete(id) : sel.m.add(id); sel.w = null; refreshReco(); },
+  team: (id) => { if (!sel.inc) { toast('Pilih insiden dulu'); return 0; } sel.m = new Set(S.members.filter((m) => m.team_id === id && m.status === 'Standby').map((m) => m.id)); sel.w = null; refreshReco(); },
+  w: (id) => { sel.w = id; schedulePreview(); },
+  send: () => { send(); return 0; },
+  link: () => { reporterLink(); return 0; },
+  ginc: () => { gameIncident(); return 0; },
+  speed: (_, v) => { setSpeed(+v); return 0; },
+  vr: (id) => { verify(id, 'verified'); return 0; },
+  rj: (id) => { verify(id, 'rejected'); return 0; },
+};
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-a]'); if (!el) return;
+  const f = ACT[el.dataset.a]; if (!f) return;
+  if (f(el.dataset.id, el.dataset.v, el.dataset.a) !== 0) render();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey) return;
+  const p = [['hl', '1'], ['hr', '2'], ['hb', '3'], ['fx', 'f']].find(([k, key]) => key === e.key.toLowerCase());
+  if (p) { $('#ops').classList.toggle(p[0]); render(); return; }
+  if (e.key === 'Escape') { if ($('#ops').classList.contains('fx')) $('#ops').classList.remove('fx'); else ACT.dclose(); render(); }
+});
+
+// virtual clock: server_ts scaled by game.speed between snapshots/events
+setInterval(() => {
+  if (!S) return;
+  $('#clock').textContent = new Date(serverNowMs()).toISOString().slice(11, 19);
+}, 1000);
+if (innerWidth < 1000) $('#ops').classList.add('hl', 'hr');
+</script>
+</body>
+</html>

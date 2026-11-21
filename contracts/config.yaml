@@ -138,6 +138,25 @@ restriction_status:
 
 restriction_kinds: [point, line, polygon]
 restriction_affects: [truck, motorbike, patrol_car, all]
+game_speed: [1, 2, 4, 8]
+
+app:
+  mode: real            # real | game — game = synthetic scenario, no internet needed (docs/siren.md §9)
+
+game:
+  seed: 20261120        # fixed RNG seed: the scenario replays identically (game mode doubles as test mode)
+  tick_seconds: 1       # simulator wake interval in real time
+  speed: 1              # virtual clock multiplier, UI control via PUT /config/game.speed
+  incident_interval_minutes: 8
+  departure_delay_minutes: 1
+  scene_minutes: 12
+  consume_per_minute: 0.3   # tank level units drained per virtual minute at the scene
+  standby_jitter_deg: 0.004
+  stale_skip_probability: 0.06   # skipped standby pings -> freshness goes stale/offline on its own
+  restriction_report_probability: 0.02
+  incident_types: [Kebakaran ruko, Kebakaran lahan, Kebakaran dapur rumah, Kebakaran gedung, Evakuasi]
+  street_names: [Jl. Pasar Cikurubuk, Jl. Cihideung, Jl. Sutisna Senjaya, Jl. Cikurubuk, Jl. Garuda]
+  reporter_names: [Warga, Pelapor anonim, RT setempat]
 
 position:
   ping_live_seconds: 5          # reporting rate while duty status is active
