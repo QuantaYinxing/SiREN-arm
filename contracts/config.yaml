@@ -166,6 +166,18 @@ position:
   accuracy_warn_m: 50
   retention_days: 30            # GPS history retention (open question siren.md §12.7)
 
+geodata:
+  # Real coverage area: HQ damkar Tasikmalaya ± radius (docs/next-real-maps_done.md).
+  # Scripts read the bbox from here, never hard-code it. OSM tools use lon,lat order.
+  station: {lat: -7.311924330474647, lon: 108.19915732405596}
+  radius_km: 12
+  bbox:
+    min_lat: -7.420449
+    max_lat: -7.2034
+    min_lon: 108.090476
+    max_lon: 108.307838
+  extract_url: "https://download.geofabrik.de/asia/indonesia-latest.osm.pbf"
+
 routing:
   provider: valhalla            # valhalla | estimate
   valhalla_url: "http://127.0.0.1:8081"

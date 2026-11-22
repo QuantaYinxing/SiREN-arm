@@ -26,22 +26,104 @@ function circleLayer(id, src, radius, strokeW) {
   };
 }
 
-export async function createMap(container, { bounds = [[107.65, -7.25], [107.81, -7.08]] } = {}) {
-  const basemap = await fetch('/data/basemap.geojson').then((r) => r.json());
-  // basemap features have no color props — normalize them for data-driven paint.
-  const rivers = basemap.features.filter((f) => f.properties.kind === 'river');
-  basemap.features = basemap.features.map((f) => ({
-    ...f,
-    properties: { ...f.properties, color: f.properties.kind === 'river' ? C.river : f.properties.major ? C.roadMajor : C.roadMinor },
-  }));
-  for (const r of rivers) {
-    basemap.features.push({ ...r, properties: { ...r.properties, kind: 'riverline', color: C.riverLine } });
+const T = {
+  // Dark blueprint tokens (docs/siren.md §7.3 palette) for the real PMTiles basemap.
+  bg: '#04161a', road: '#0a3c4b', casing: '#05222b', water: '#0d5a6f', building: '#0a4d60', landuse: '#07252c',
+};
+
+async function bboxFromConfig() {
+  try {
+    const b = await fetch('/config/geodata.bbox').then((r) => (r.ok ? r.json() : null));
+    const bb = b?.value ?? b;
+    if (bb && bb.min_lat != null) return [[bb.min_lon, bb.min_lat], [bb.max_lon, bb.max_lat]];
+  } catch { /* config unreachable: caller default bounds stand */ }
+  return null;
+}
+
+// Real basemap: self-hosted PMTiles archive served by the backend at /tiles/
+// (scripts/tiles_build.sh). Falls back to the synthetic offline grid when absent.
+async function realBasemap() {
+  try {
+    const r = await fetch('/tiles/siren.pmtiles', { method: 'GET', range: 'bytes=0-31' });
+    if (!r.ok) return null;
+    const head = await r.arrayBuffer();
+    if (head.byteLength < 4 || new TextDecoder().decode(head.slice(0, 3)) !== 'PMT') return null;
+    maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
+    return {
+      type: 'vector',
+      // pmtiles.Protocol (v4.5) parses the z/x/y out of the request URL itself.
+      tiles: ['pmtiles:///tiles/siren.pmtiles/{z}/{x}/{y}'],
+      minzoom: 0,
+      maxzoom: 14,
+    };
+  } catch { return null; }
+}
+
+function basemapLayers(source) {
+  if (source === 'pmtiles') {
+    // protomaps basemap 4.15 layers (earth, landuse, landcover, water, roads,
+    // buildings) painted with the blueprint tokens; no text labels (no glyph
+    // sheet vendored). Feature `kind` drives road ranking and water strokes.
+    return [
+      { id: 'earth', type: 'fill', source: 'basemap', 'source-layer': 'earth',
+        paint: { 'fill-color': T.bg } },
+      { id: 'landuse', type: 'fill', source: 'basemap', 'source-layer': 'landuse',
+        paint: { 'fill-color': T.landuse, 'fill-opacity': 0.7 } },
+      { id: 'landcover', type: 'fill', source: 'basemap', 'source-layer': 'landcover',
+        paint: { 'fill-color': T.landuse, 'fill-opacity': 0.6 } },
+      { id: 'water', type: 'fill', source: 'basemap', 'source-layer': 'water',
+        paint: { 'fill-color': T.water, 'fill-opacity': 0.85 } },
+      { id: 'water-line', type: 'line', source: 'basemap', 'source-layer': 'water',
+        paint: { 'line-color': '#16667c', 'line-width': 1.2 } },
+      { id: 'building', type: 'fill', source: 'basemap', 'source-layer': 'buildings',
+        paint: { 'fill-color': T.building, 'fill-opacity': 0.55 } },
+      { id: 'road-casing-major', type: 'line', source: 'basemap', 'source-layer': 'roads',
+        filter: ['==', ['get', 'kind'], 'major_road'],
+        paint: { 'line-color': T.casing, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2, 14, 6] } },
+      { id: 'road-major', type: 'line', source: 'basemap', 'source-layer': 'roads',
+        filter: ['==', ['get', 'kind'], 'major_road'],
+        paint: { 'line-color': T.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1, 14, 3.5] } },
+      { id: 'road-casing-minor', type: 'line', source: 'basemap', 'source-layer': 'roads',
+        filter: ['==', ['get', 'kind'], 'minor_road'],
+        paint: { 'line-color': T.casing, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 14, 4] } },
+      { id: 'road-minor', type: 'line', source: 'basemap', 'source-layer': 'roads',
+        filter: ['==', ['get', 'kind'], 'minor_road'],
+        paint: { 'line-color': T.road, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.8, 14, 2] } },
+    ];
+  }
+  // Synthetic grid fallback (prototype schematic, kept for offline/no-tiles dev).
+  return [
+    lineLayer('river', 'basemap', ['==', ['get', 'kind'], 'river'], '#0f2f43', 16),
+    lineLayer('riverline', 'basemap', ['==', ['get', 'kind'], 'riverline'], C.riverLine, 1.5),
+    lineLayer('roads', 'basemap', ['==', ['get', 'kind'], 'road'], C.roadMinor, 4),
+    lineLayer('roads-major', 'basemap', ['all', ['==', ['get', 'kind'], 'road'], ['==', ['get', 'major'], true]], C.roadMajor, 7),
+  ];
+}
+
+export async function createMap(container, { bounds } = {}) {
+  bounds = bounds || (await bboxFromConfig()) || [[107.65, -7.25], [107.81, -7.08]];
+  const real = await realBasemap();
+  let basemapSource;
+  if (real) {
+    basemapSource = real;
+  } else {
+    const basemap = await fetch('/data/basemap.geojson').then((r) => r.json());
+    // basemap features have no color props — normalize them for data-driven paint.
+    const rivers = basemap.features.filter((f) => f.properties.kind === 'river');
+    basemap.features = basemap.features.map((f) => ({
+      ...f,
+      properties: { ...f.properties, color: f.properties.kind === 'river' ? C.river : f.properties.major ? C.roadMajor : C.roadMinor },
+    }));
+    for (const r of rivers) {
+      basemap.features.push({ ...r, properties: { ...r.properties, kind: 'riverline', color: C.riverLine } });
+    }
+    basemapSource = { type: 'geojson', data: basemap };
   }
   const empty = FC([]);
   const style = {
     version: 8,
     sources: {
-      basemap: { type: 'geojson', data: basemap },
+      basemap: basemapSource,
       stations: { type: 'geojson', data: empty },
       water: { type: 'geojson', data: empty },
       incidents: { type: 'geojson', data: empty },
@@ -51,11 +133,8 @@ export async function createMap(container, { bounds = [[107.65, -7.25], [107.81,
       route: { type: 'geojson', data: empty },
     },
     layers: [
-      { id: 'bg', type: 'background', paint: { 'background-color': '#080c12' } },
-      lineLayer('river', 'basemap', ['==', ['get', 'kind'], 'river'], '#0f2f43', 16),
-      lineLayer('riverline', 'basemap', ['==', ['get', 'kind'], 'riverline'], C.riverLine, 1.5),
-      lineLayer('roads', 'basemap', ['==', ['get', 'kind'], 'road'], C.roadMinor, 4),
-      lineLayer('roads-major', 'basemap', ['all', ['==', ['get', 'kind'], 'road'], ['==', ['get', 'major'], true]], C.roadMajor, 7),
+      { id: 'bg', type: 'background', paint: { 'background-color': real ? T.bg : '#080c12' } },
+      ...basemapLayers(real ? 'pmtiles' : 'grid'),
       { id: 'restr-fill', type: 'fill', source: 'restrictions', filter: ['==', ['get', 'kind'], 'polygon'],
         paint: { 'fill-color': C.restr, 'fill-opacity': 0.22 } },
       lineLayer('restr-line', 'restrictions', ['==', ['get', 'kind'], 'polygon'], C.restr, 1.5),

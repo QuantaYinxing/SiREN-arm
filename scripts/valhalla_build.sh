@@ -1,46 +1,72 @@
 #!/usr/bin/env bash
-# Build Valhalla routing tiles from a Geofabrik OSM extract (docs/siren.md D1).
+# Build Valhalla routing tiles from the bbox crop (scripts/osm_crop.py; bbox comes
+# from contracts/config.yaml geodata). Valhalla is already compiled by Candra into
+# .sandbox/bin (commit ac46322637801a3ea7735cf1ba63f7928a9314c4); prime_server's lib
+# lives in .sandbox/lib, so LD_LIBRARY_PATH must be exported before running them.
 # Everything stays inside .sandbox/ (docs/rules.md §sandboxing); generated data is
 # never committed.
-#
-# Requires the Valhalla binaries (valhalla_build_tiles, valhalla_convert) on PATH.
-# docker/podman are absent on this laptop, so run it on a machine with Valhalla
-# installed or inside the valhalla compose container (infra/README.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root, wherever the script is invoked from
 
-# Geofabrik Indonesia extract (~1 GB pbf). For a first laptop-sized build prefer
-# the Jawa extract instead — roughly 10x smaller and it covers the Jawa region
-# SiREN needs first:
-#   OSM_URL=https://download.geofabrik.de/asia/indonesia-jawa-latest.osm.pbf ./scripts/valhalla_build.sh
-OSM_URL="${OSM_URL:-https://download.geofabrik.de/asia/indonesia-latest.osm.pbf}"
-OSM_FILE=".sandbox/data/osm/$(basename "$OSM_URL")"
+BIN=".sandbox/bin"
+export LD_LIBRARY_PATH="$PWD/.sandbox/lib"
+CROP=".sandbox/data/osm/siren-bbox.osm.pbf"
 TILES_DIR=".sandbox/data/valhalla"
+CONFIG=".sandbox/data/valhalla/valhalla.json"
 
 # Explicit thread cap; never all cores (docs/rules.md heavy-build rules).
 THREADS="${THREADS:-4}"
 
 mkdir -p .sandbox/data/osm "$TILES_DIR"
 
-if [ ! -f "$OSM_FILE" ]; then
-  echo "Downloading $OSM_URL ..."
-  curl -L --fail -o "$OSM_FILE.part" "$OSM_URL"
-  # Rename only on success, so an interrupted download is never treated as done.
-  mv "$OSM_FILE.part" "$OSM_FILE"
+if [ ! -f "$CROP" ]; then
+  echo "Cropping extract (bbox from contracts/config.yaml) ..."
+  nice -n 10 .sandbox/py/bin/python scripts/osm_crop.py
 fi
 
-if ! command -v valhalla_build_tiles >/dev/null 2>&1; then
-  echo "valhalla_build_tiles not found on PATH; see infra/README.md" >&2
-  exit 1
+# Config skeleton with the tile extract path and listen port (Valhalla's default
+# is 8002; contracts/config.yaml routing.valhalla_url expects 8081). The routing
+# section (truck/motorcycle/auto costing) comes from infra/valhalla.json.
+"$BIN/valhalla_build_config" \
+  --mjolnir-tile-dir "$PWD/$TILES_DIR" \
+  --mjolnir-tile-extract "$PWD/$TILES_DIR/valhalla_tiles.tar" \
+  --httpd-service-listen "tcp://127.0.0.1:8081" -o "$CONFIG"
+ROOT="$PWD"
+python3 - "$CONFIG" infra/valhalla.json "$PWD/$TILES_DIR" <<'EOF'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+base = json.load(open(sys.argv[2]))
+cfg["routing"] = base["routing"]
+# Default build_config points admin/timezone DBs at /data (the container path);
+# the dev build keeps them next to the tiles inside the sandbox.
+cfg["mjolnir"]["admin"] = sys.argv[3] + "/admin.sqlite"
+cfg["mjolnir"]["timezone"] = sys.argv[3] + "/tz_world.sqlite"
+# Verified flood polygons near the HQ run ~11 km around; the default 10 km
+# exclude-polygon limit would reject them.
+cfg["service_limits"]["max_exclude_polygons_length"] = 30000
+# routing.router ships with /valhalla/tiles paths; Thor's polygon avoids open
+# the spatial index sqlite there and segfault on a missing file.
+cfg["routing"]["router"]["tile_extract"] = sys.argv[3] + "/valhalla_tiles.tar"
+cfg["routing"]["router"]["spatial_index"]["sqlite_file"] = sys.argv[3] + "/valhalla_tiles.spatial.idx.sqlite"
+json.dump(cfg, open(sys.argv[1], "w"), indent=2)
+EOF
+
+# Valhalla 3.9 builds the admin SQLite from the OSM extract itself (not from
+# shapefiles), and routing uses it during graph build, so it must run first.
+nice -n 10 "$BIN/valhalla_build_admins" -c "$CONFIG" "$CROP"
+
+# The timezone DB is optional for this area; the tool downloads its own
+# shapefile archive, so run it from the sandbox data dir to keep files out of
+# the repo.
+if [ ! -f "$PWD/$TILES_DIR/tz_world.sqlite" ]; then
+  (cd "$TILES_DIR" && nice -n 10 "$ROOT/$BIN/valhalla_build_timezones" -c "$ROOT/$CONFIG") || true
 fi
 
-# Tile extraction is CPU-heavy: nice -n 10 plus the thread cap keep the local
-# inference engine usable (its model holds nearly all RAM on this laptop).
-nice -n 10 valhalla_build_tiles --threads "$THREADS" -o "$TILES_DIR" "$OSM_FILE"
+nice -n 10 "$BIN/valhalla_build_tiles" -c "$CONFIG" -j "$THREADS" "$CROP"
 
-# Pack the tile directory into the single tar extract the Valhalla service reads;
-# infra/valhalla.json points at /valhalla/tiles/valhalla_tiles.tar in the container.
-nice -n 10 valhalla_convert --build_tiles --threads "$THREADS" \
-  --input "$TILES_DIR" --output "$TILES_DIR/valhalla_tiles.tar"
+# Pack the tile directory into the single tar extract the Valhalla service reads.
+nice -n 10 "$BIN/valhalla_build_extract" -c "$CONFIG" -O \
+  -e "$TILES_DIR/valhalla_tiles.tar"
 
-echo "Done: $TILES_DIR/valhalla_tiles.tar"
+echo "Done: $TILES_DIR/valhalla_tiles.tar ($(stat -c %s "$TILES_DIR/valhalla_tiles.tar") bytes)"
+echo "Serve: LD_LIBRARY_PATH=$PWD/.sandbox/lib $BIN/valhalla_service $CONFIG 1"

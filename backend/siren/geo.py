@@ -33,6 +33,16 @@ def polyline_km(points: Sequence[Point]) -> float:
     return sum(haversine_km(p, q) for p, q in zip(points, points[1:]))
 
 
+def bbox_from_station(lat: float, lon: float, radius_km: float) -> tuple[float, float, float, float]:
+    """Coverage bbox (min_lat, max_lat, min_lon, max_lon) = station ± radius.
+
+    Latitude degrees ~ 110.574 km; longitude degrees shrink with cos(latitude)
+    (equirectangular approximation, good enough at city scale)."""
+    dlat = radius_km / 110.574
+    dlon = radius_km / (111.320 * cos(radians(lat)))
+    return (lat - dlat, lat + dlat, lon - dlon, lon + dlon)
+
+
 def bbox(ring: Ring) -> tuple[float, float, float, float]:
     lats = [float(p[0]) for p in ring]
     lons = [float(p[1]) for p in ring]

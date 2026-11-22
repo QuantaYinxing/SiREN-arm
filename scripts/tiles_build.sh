@@ -1,32 +1,45 @@
 #!/usr/bin/env bash
-# Build self-hosted vector tiles as a single PMTiles archive (docs/siren.md stack
-# table: self-hosted vector tiles). Uses the same Geofabrik input file as
-# scripts/valhalla_build.sh; output lives in .sandbox/data/tiles/ and is never
-# committed (docs/rules.md §sandboxing).
+# Build the self-hosted vector basemap as a single PMTiles archive (docs/siren.md
+# stack table: self-hosted vector tiles). Pipeline: protomaps daily planet build
+# (https://build.protomaps.com) -> `pmtiles extract --bbox` (go-pmtiles binary in
+# .sandbox/bin; range requests only, no planet download). The bbox comes from
+# contracts/config.yaml geodata, never hard-coded here. Output stays in
+# .sandbox/data/tiles/ and is never committed (docs/rules.md §sandboxing).
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root, wherever the script is invoked from
 
-OSM_URL="${OSM_URL:-https://download.geofabrik.de/asia/indonesia-latest.osm.pbf}"
-OSM_FILE=".sandbox/data/osm/$(basename "$OSM_URL")"
 OUT=".sandbox/data/tiles/siren.pmtiles"
+mkdir -p .sandbox/data/tiles
 
-mkdir -p .sandbox/data/osm .sandbox/data/tiles
+# Coverage bbox from contracts/config.yaml (min_lon,min_lat,max_lon,max_lat —
+# pmtiles extract wants lon,lat order).
+BBOX="$(.sandbox/py/bin/python - <<'EOF'
+import sys
+sys.path.insert(0, "backend")
+from siren.config import Config
+b = Config.load("contracts/config.yaml").get("geodata.bbox")
+print(f"{b['min_lon']},{b['min_lat']},{b['max_lon']},{b['max_lat']}")
+EOF
+)"
 
-if [ ! -f "$OSM_FILE" ]; then
-  echo "Downloading $OSM_URL ..."
-  curl -L --fail -o "$OSM_FILE.part" "$OSM_URL"
-  # Rename only on success, so an interrupted download is never treated as done.
-  mv "$OSM_FILE.part" "$OSM_FILE"
+# Newest daily build, probing back a few days for availability.
+BUILD="${PROTOMAPS_BUILD:-}"
+if [ -z "$BUILD" ]; then
+  for i in 0 1 2 3 4 5 6; do
+    d=$(date -d "-$i day" +%Y%m%d)
+    if curl -sfI "https://build.protomaps.com/$d.pmtiles" >/dev/null 2>&1; then
+      BUILD="https://build.protomaps.com/$d.pmtiles"
+      break
+    fi
+  done
+fi
+if [ -z "$BUILD" ]; then
+  echo "No recent protomaps daily build found" >&2
+  exit 1
 fi
 
-# Tile server choice: TileServer GL (the `tiles` service in docker-compose.yml)
-# serves this directory of PMTiles. PMTiles is a single-file archive with range
-# requests, so Caddy could serve it statically too; TileServer GL is kept because
-# it also ships a demo map for eyeballing the basemap.
-# `uvx` fetches the CLI from the protomaps-cli package on demand (uv is installed
-# in .sandbox; nothing is installed system-wide). Zoom 0-14 gives district-level
-# detail; raising it grows the file by several GB — tune only if needed.
-nice -n 10 uvx --from protomaps-cli protomaps build "$OSM_FILE" \
-  --output "$OUT" --max-zoom 14 --edge-buffer 8000
+echo "Extracting bbox $BBOX from $BUILD (zoom 0-14) ..."
+nice -n 10 .sandbox/bin/pmtiles extract "$BUILD" "$OUT" \
+  --bbox="$BBOX" --maxzoom=14 --download-threads=4
 
-echo "Done: $OUT"
+echo "Done: $OUT ($(stat -c %s "$OUT") bytes)"

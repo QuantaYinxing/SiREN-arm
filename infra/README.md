@@ -39,18 +39,27 @@ Services (see `infra/docker-compose.yml`, host mounts commented there):
 Routing/vector tiles are built once, sandboxed, and reused:
 
 ```sh
-./scripts/valhalla_build.sh   # Valhalla tiles -> .sandbox/data/valhalla
-./scripts/tiles_build.sh      # PMTiles basemap -> .sandbox/data/tiles
+./scripts/valhalla_build.sh   # Valhalla tiles -> .sandbox/data/valhalla (port 8081 in config)
+./scripts/tiles_build.sh      # PMTiles basemap -> .sandbox/data/tiles (protomaps planet extract)
 ```
 
-Both accept `OSM_URL` (Geofabrik extract) and thread caps; see the script headers.
+Both read the coverage bbox from `contracts/config.yaml` (`geodata.bbox`) and accept
+thread caps; see the script headers. Dev serving: the backend serves
+`.sandbox/data/tiles/*.pmtiles` at `/tiles/{name}` with byte-range (206) support —
+no separate tile server needed; the frontend registers the vendored pmtiles protocol
+(`apps/vendor/pmtiles.js`). Valhalla dev instance:
+`LD_LIBRARY_PATH=$PWD/.sandbox/lib .sandbox/bin/valhalla_service .sandbox/data/valhalla/valhalla.json 1`.
 
 ## Gaps on this laptop (honest list)
 
 - **docker and podman are absent**, so the compose stack has never been executed
   here — `infra/docker-compose.yml` is written and YAML-valid, nothing more.
-- **Valhalla binaries are absent**, so `scripts/valhalla_build.sh` cannot run on
-  this machine; it needs a host with Valhalla installed (or the compose container).
+- **Valhalla binaries are compiled locally** into `.sandbox/bin` (commit pin
+  `ac46322637801a3ea7735cf1ba63f7928a9314c4`), with prime_server built from
+  commit `0d41876997760e22396075aeb7873bffcffd8786`; libs live in `.sandbox/lib`.
+  Always `export LD_LIBRARY_PATH="$PWD/.sandbox/lib"` before invoking them.
+  Python bindings/tests were not built; only the HTTP service (`valhalla_service`)
+  is available.
 - **npm is absent** (node exists but npm does not), so the frontend phase that
   produces `apps/ops/dist` and `apps/field/dist` cannot build here yet; the
   Caddyfile roots for those dirs are commented as future mounts.

@@ -1,42 +1,240 @@
 [
   {
     "id": "w1",
-    "name": "Hidran Pasar Cikurubuk",
-    "type": "hydrant",
+    "name": "Kolam",
+    "type": "pond",
     "status": "active",
-    "lat": -7.13,
-    "lon": 107.75,
-    "capacity_note": "± 600 L/mnt",
-    "access_points": [{"lat": -7.13, "lon": 107.75}]
+    "lat": -7.402138,
+    "lon": 108.149546,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.402138,
+        "lon": 108.149546,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
   },
   {
     "id": "w2",
-    "name": "Sungai Ciwulan",
-    "type": "river",
+    "name": "Situ Cibeureum",
+    "type": "pond",
     "status": "active",
-    "lat": -7.182,
-    "lon": 107.7925,
-    "capacity_note": "debit besar, akses turun tebing",
-    "access_points": [{"lat": -7.182, "lon": 107.7925}]
+    "lat": -7.38587,
+    "lon": 108.244734,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.38587,
+        "lon": 108.244734,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
   },
   {
     "id": "w3",
-    "name": "Kolam Taman Kota",
+    "name": "Kolam",
     "type": "pond",
     "status": "active",
-    "lat": -7.13,
-    "lon": 107.7025,
-    "capacity_note": "± 40 m³",
-    "access_points": [{"lat": -7.13, "lon": 107.7025}]
+    "lat": -7.364575,
+    "lon": 108.295574,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.364575,
+        "lon": 108.295574,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
   },
   {
     "id": "w4",
-    "name": "Tandon Kodim",
-    "type": "tank",
-    "status": "dry",
-    "lat": -7.182,
-    "lon": 107.6625,
-    "capacity_note": "kosong",
-    "access_points": [{"lat": -7.182, "lon": 107.6625}]
+    "name": "Kolam",
+    "type": "pond",
+    "status": "active",
+    "lat": -7.204032,
+    "lon": 108.195834,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.204032,
+        "lon": 108.195834,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w5",
+    "name": "Danau",
+    "type": "pond",
+    "status": "active",
+    "lat": -7.296415,
+    "lon": 108.252749,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.296415,
+        "lon": 108.252749,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w6",
+    "name": "Danau",
+    "type": "pond",
+    "status": "active",
+    "lat": -7.388307,
+    "lon": 108.238509,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.388307,
+        "lon": 108.238509,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w7",
+    "name": "Danau",
+    "type": "pond",
+    "status": "active",
+    "lat": -7.390528,
+    "lon": 108.237934,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.390528,
+        "lon": 108.237934,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w8",
+    "name": "Situ Malingping",
+    "type": "pond",
+    "status": "active",
+    "lat": -7.396546,
+    "lon": 108.242915,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.396546,
+        "lon": 108.242915,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w9",
+    "name": "Ci Kunir",
+    "type": "river",
+    "status": "active",
+    "lat": -7.320254,
+    "lon": 108.136462,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.320254,
+        "lon": 108.136462,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w10",
+    "name": "Sungai",
+    "type": "river",
+    "status": "active",
+    "lat": -7.34966,
+    "lon": 108.154744,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.34966,
+        "lon": 108.154744,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w11",
+    "name": "Ci Loseh",
+    "type": "river",
+    "status": "active",
+    "lat": -7.274204,
+    "lon": 108.150465,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.274204,
+        "lon": 108.150465,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w12",
+    "name": "Sungai",
+    "type": "river",
+    "status": "active",
+    "lat": -7.213374,
+    "lon": 108.288929,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.213374,
+        "lon": 108.288929,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w13",
+    "name": "Ci Baruyan",
+    "type": "river",
+    "status": "active",
+    "lat": -7.24487,
+    "lon": 108.224387,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.24487,
+        "lon": 108.224387,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
+  },
+  {
+    "id": "w14",
+    "name": "Sungai",
+    "type": "river",
+    "status": "active",
+    "lat": -7.361266,
+    "lon": 108.164173,
+    "capacity_note": null,
+    "notes": "OSM placeholder, needs field survey",
+    "access_points": [
+      {
+        "lat": -7.361266,
+        "lon": 108.164173,
+        "note": "OSM placeholder, needs field survey"
+      }
+    ]
   }
 ]

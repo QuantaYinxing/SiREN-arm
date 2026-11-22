@@ -56,6 +56,7 @@
 <div id="toast" role="status"></div>
 
 <script src="/vendor/maplibre-gl.js"></script>
+<script src="/vendor/pmtiles.js"></script>
 <script type="module">
 import { login, loadSession, ensureSession, rest, connectWS, errText } from '/shared/api.js';
 import { createMap, mapData, applyMap } from '/shared/map.js';
@@ -139,7 +140,7 @@ function fold(ev) {
 
 // ---- mini map ----
 async function initMap() {
-  map = await createMap($('#fmap'), { bounds: [[107.65, -7.25], [107.81, -7.08]] });
+  map = await createMap($('#fmap'));
   globalThis.__map = map; // dev hook: inspect sources from the console
   paintMap();
 }

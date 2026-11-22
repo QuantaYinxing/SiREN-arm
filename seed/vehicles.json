@@ -9,8 +9,8 @@
     "pump_flow_lpm": 800,
     "tank_capacity_l": 4000,
     "status": "Standby",
-    "lat": -7.154,
-    "lon": 107.7025
+    "lat": -7.311924330474647,
+    "lon": 108.19915732405596
   },
   {
     "id": "v2",
@@ -22,7 +22,7 @@
     "pump_flow_lpm": 800,
     "tank_capacity_l": 4000,
     "status": "Standby",
-    "lat": -7.218,
-    "lon": 107.72
+    "lat": -7.311924330474647,
+    "lon": 108.19915732405596
   }
 ]

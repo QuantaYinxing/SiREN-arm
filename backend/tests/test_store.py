@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "contracts" / "config.yaml"
 SEED_DIR = ROOT / "seed"
 
+
+def _seed(kind: str) -> list[dict]:
+    return json.loads((SEED_DIR / f"{kind}.json").read_text())
+
 T0 = datetime(2026, 11, 19, 7, 32, 0, tzinfo=timezone.utc)
 YESTERDAY = (T0 - timedelta(days=1)).date().isoformat()
 
@@ -81,13 +85,15 @@ def test_load_seed_counts_and_is_idempotent(tmp_path):
     store2, _ = make_store(tmp_path / "fresh.sqlite")
     first = store2.load_seed(SEED_DIR)
     assert first == {"station": 1, "teams": 2, "vehicle_profiles": 3, "vehicles": 2,
-                     "members": 6, "accounts": 7, "water_sources": 4, "road_restrictions": 2,
+                     "members": 6, "accounts": 7, "water_sources": len(_seed("water_sources")),
+                     "road_restrictions": 2,
                      "incidents": 2, "assignments": 3}
 
 
 def test_seed_content_and_status_consistency(tmp_path):
     store, _ = seeded_store(tmp_path / "db.sqlite")
-    assert store.station_position() == (-7.218, 107.72)
+    assert store.station_position() == (-7.311924330474647, 108.19915732405596)
+    assert store.stations()[0]["name"] == "Pos Damkar Tasikmalaya"
     teams = store.teams()
     assert [t["id"] for t in teams] == ["t1", "t2"]
     assert teams[0]["color"] == "#ff9f68"
@@ -103,13 +109,15 @@ def test_seed_content_and_status_consistency(tmp_path):
     assert store.authenticate("a.asep", "siren-dev")["member_id"] == "A"
     assert store.authenticate("b.budi", "wrong-password") is None
     sources = {w["id"]: w for w in store.water_sources()}
-    assert sources["w4"]["status"] == "dry"
-    assert sources["w1"]["access_points"] == [{"lat": -7.13, "lon": 107.75}]
-    assert sources["w1"]["capacity_note"] == "± 600 L/mnt"
+    assert sources, "water seed must not be empty"
+    assert all(s["status"] == "active" for s in sources.values())
+    assert all(s["notes"] == "OSM placeholder, needs field survey" for s in sources.values())
+    for w in _seed("water_sources"):
+        assert sources[w["id"]]["access_points"] == [{"lat": w["lat"], "lon": w["lon"]}]
     restrictions = {r["id"]: r for r in store.restrictions()}
     assert restrictions["r1"]["geometry"] == {
         "kind": "polygon",
-        "coordinates": [[-7.186, 107.7225], [-7.186, 107.74375], [-7.214, 107.74375], [-7.214, 107.7225]]}
+        "coordinates": [[-7.336, 108.2], [-7.336, 108.222], [-7.364, 108.222], [-7.364, 108.2]]}
     assert restrictions["r2"]["status"] == "pending"
     assert restrictions["r2"]["reported_member_id"] == "B"
     assert store.active_restrictions("truck") == [restrictions["r1"]]
@@ -479,7 +487,7 @@ def test_snapshot_shape(tmp_path):
     for inc in snap["incidents"]:
         assert set(inc) == set(_INCIDENT_KEYS) | {"location"}
         assert inc["id"] in {"I-25", "I-27"} and "lat" not in inc
-    assert {i["id"]: i for i in snap["incidents"]}["I-25"]["location"] == {"lat": -7.154, "lon": 107.75}
+    assert {i["id"]: i for i in snap["incidents"]}["I-25"]["location"] == {"lat": -7.34, "lon": 108.235}
     assert len(snap["assignments"]) == 3
     assert all(a["status"] == "Completed" for a in snap["assignments"])
     assert all(set(a) <= {"id", "incident_id", "member_id", "vehicle_id", "water_source_id",
@@ -487,8 +495,10 @@ def test_snapshot_shape(tmp_path):
     by_id = {r["id"]: r for r in snap["road_restrictions"]}
     assert by_id["r1"]["geometry"]["kind"] == "polygon"
     assert len(by_id["r1"]["geometry"]["coordinates"]) == 4
-    assert snap["water_sources"][0]["location"] == {"lat": -7.13, "lon": 107.75}
-    assert snap["water_sources"][0]["access_points"] == [{"lat": -7.13, "lon": 107.75}]
+    w0 = _seed("water_sources")[0]
+    assert snap["water_sources"][0]["location"] == {"lat": w0["lat"], "lon": w0["lon"]}
+    assert snap["water_sources"][0]["access_points"] == [
+        {"lat": w0["access_points"][0]["lat"], "lon": w0["access_points"][0]["lon"]}]
     assert snap["reporter_links"] == [] and snap["event_log"] == []
     assert snap["stats_today"]["date"] == "2026-11-19"
 

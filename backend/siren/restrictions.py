@@ -2,7 +2,7 @@
 
 Only `verified` and not-expired restrictions affect routing. Field reports arrive as
 `pending` and wait for the operator (who may verify is open question §12.6). Verified
-geometry is sent to Valhalla as exclude_locations / exclude_polygons; the estimate
+geometry is sent to Valhalla as costing_options exclude_polygons (§5.2); the estimate
 fallback cannot honour excludes, so it flags legs that cross a restriction instead.
 """
 
@@ -36,23 +36,35 @@ def selection(
 
 
 def valhalla_exclusions(restrictions: list[dict]) -> dict[str, Any]:
-    """Map restriction geometry onto Valhalla request fields.
+    """Map restriction geometry onto Valhalla's costing_options.exclude_polygons.
 
-    point -> exclude_locations, polygon -> exclude_polygons, line -> a buffered polygon
-    (OSM rarely carries road width in Indonesia, so the buffer is the honest approximation).
+    point -> small square, polygon -> ring, line -> a buffered polygon (OSM rarely
+    carries road width in Indonesia, so the buffer is the honest approximation).
+    exclude_locations is not used: this Valhalla build segfaults on it, and the
+    squares block edges during routing, which is the point-restriction semantic.
     """
-    locations: list[dict[str, float]] = []
     polygons: list[list[list[float]]] = []
     for r in restrictions:
         geom = r["geometry"]
         coords = geom["coordinates"]
         if geom["kind"] == "point":
-            locations.append({"lat": coords[0][0], "lon": coords[0][1]})
-        elif geom["kind"] == "polygon":
-            polygons.append(coords)
+            # Valhalla crashes (SIGSEGV in this build) on exclude_locations, so
+            # a point restriction is sent as a small square blocking the roads
+            # around it (~220 m, matching blocks()'s 0.4 km corridor check).
+            lat, lon = coords[0]
+            d = 0.002
+            polygons.append([[lon - d, lat - d], [lon + d, lat - d], [lon + d, lat + d],
+                             [lon - d, lat + d], [lon - d, lat - d]])
         else:
-            polygons.append(buffer_line(coords))
-    return {"exclude_locations": locations, "exclude_polygons": polygons}
+            # Valhalla's exclude_polygons is an array of rings, and each ring is
+            # GeoJSON [lon, lat] pairs (worker.cc parse_ring); our stored coords
+            # are [lat, lon]. Close the ring for safety.
+            raw = coords if geom["kind"] == "polygon" else buffer_line(coords)
+            ring = [[lon, lat] for lat, lon in raw]
+            if ring[0] != ring[-1]:
+                ring.append(ring[0])
+            polygons.append(ring)
+    return {"exclude_polygons": polygons}
 
 
 def sample_leg(a: tuple[float, float], b: tuple[float, float], samples: int = 9) -> list[tuple[float, float]]:

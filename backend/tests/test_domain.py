@@ -11,7 +11,7 @@ from fake_store import FakeStore
 from siren.config import Config, ConfigError
 from siren.geo import buffer_line, haversine_km, point_in_ring
 from siren.restrictions import crossing, selection, valhalla_exclusions
-from siren.routing import build_route, costing_for, estimate_leg, water_options
+from siren.routing import _decode_shape, build_route, costing_for, estimate_leg, water_options
 from siren.state import RELEASE_STATUSES, TransitionError, apply_member_status, check, recompute_incident
 from siren.timeutil import add_minutes
 from siren.water import estimated_level, tick
@@ -220,11 +220,38 @@ def test_valhalla_exclusions_mapping():
         {"geometry": {"kind": "polygon", "coordinates": FLOOD}},
         {"geometry": {"kind": "line", "coordinates": [[-7.15, 107.70], [-7.16, 107.72]]}},
     ])
-    assert ex["exclude_locations"] == [{"lat": -7.13, "lon": 107.6625}]
-    assert len(ex["exclude_polygons"]) == 2
-    assert ex["exclude_polygons"][0] == FLOOD
-    buf = ex["exclude_polygons"][1]
-    assert len(buf) == 4 and all(len(p) == 2 for p in buf)
+    assert len(ex["exclude_polygons"]) == 3
+    square = ex["exclude_polygons"][0]
+    assert square[0] == square[-1] and len(square) == 5  # point -> closed blocking square
+    assert square[0] == [107.6625 - 0.002, -7.13 - 0.002]  # [lon,lat] order
+    ring = ex["exclude_polygons"][1]
+    assert ring == [[lon, lat] for lat, lon in FLOOD + [FLOOD[0]]]  # [lon,lat], closed
+    buf = ex["exclude_polygons"][2]
+    assert buf[0] == buf[-1] and all(len(p) == 2 for p in buf)
+
+
+def test_valhalla_shape_decodes_both_encodings():
+    prev = [0.0, 0.0]
+
+    def enc_delta(v, k):
+        d = int(round((v - prev[k]) * 1e6))
+        prev[k] = v
+        n = d << 1
+        if n < 0:
+            n = ~n
+        out = ""
+        while n >= 32:
+            out += chr((n & 31 | 32) + 63)
+            n >>= 5
+        return out + chr(n + 63)
+
+    pts = [(-7.312, 108.199), (-7.341, 108.235)]
+    shape = "".join(enc_delta(lat, 0) + enc_delta(lon, 1) for lat, lon in pts)
+    decoded = _decode_shape(shape)
+    assert len(decoded) == 2
+    for got, want in zip(decoded, pts):
+        assert abs(got[0] - want[0]) < 1e-5 and abs(got[1] - want[1]) < 1e-5
+    assert _decode_shape("-7.312,108.199,-7.341,108.235") == pts
 
 
 def test_estimate_route_warns_when_leg_crosses_verified_restriction():

@@ -108,7 +108,7 @@ def test_crew_lifecycle_dispatch_to_selesai(tmp_path):
     client, store, hub, clock, app = make_env(tmp_path)
     ops = login(client)
     sim = app.state.sim
-    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.25, "lon": 107.75},
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.288, "lon": 108.246},
                       headers=ops).json()["id"]
     resp = client.post(f"/incidents/{iid}/assignments",
                        json={"members": ["A", "B"], "vehicle_id": "v1", "water_source_id": "w1"},
@@ -167,7 +167,7 @@ def test_officer_reports_restriction_while_enroute(tmp_path):
     client, store, hub, clock, app = make_env(tmp_path)
     ops = login(client)
     store.config = store.config.replaced("game.restriction_report_probability", 1.0)
-    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.25, "lon": 107.75},
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.288, "lon": 108.246},
                       headers=ops).json()["id"]
     client.post(f"/incidents/{iid}/assignments",
                 json={"members": ["A"], "vehicle_id": "v1"}, headers=ops)

@@ -1,7 +1,10 @@
 """Route building: Valhalla truck costing (D1, D4) plus a straight-line estimate fallback.
 
 The vehicle profile comes from the assigned vehicle, never from a user choice (D4).
-Verified road restrictions are sent as exclude_locations / exclude_polygons (§5.2).
+Verified road restrictions are sent as costing_options exclude_polygons (§5.2).
+Truck costing cannot take polygon excludes (SIGSEGV in the pinned Valhalla build), so
+truck routes stay on the truck profile and crossing restrictions inflate the ETA via
+`routing.fallback.blocked_penalty` with a warning, like the estimate fallback.
 When Valhalla is not reachable (dev laptop without Docker), `estimate` mode computes
 haversine x detour_factor at an average speed and flags restrictions it cannot avoid —
 the numbers are honest estimates, not real truck routing.
@@ -14,7 +17,7 @@ from typing import Any
 import httpx
 
 from .config import Config
-from .geo import haversine_km, position
+from .geo import blocks, haversine_km, position
 from .restrictions import crossing, selection, valhalla_exclusions
 from .store import NotFound
 
@@ -71,17 +74,44 @@ def access_point(source: dict, from_pt: tuple[float, float]) -> tuple[float, flo
     return min((position(p) for p in pts), key=lambda q: haversine_km(from_pt, q))
 
 
+def _decode_shape(shape: str) -> list[tuple[float, float]]:
+    """Valhalla json shapes are either raw 'lat,lon,lat,lon,...' or polyline6-encoded."""
+    if "," in shape:
+        nums = [float(x) for x in shape.split(",")]
+        return [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
+    pts: list[tuple[float, float]] = []
+    lat = lon = 0.0
+    i = 0
+    while i < len(shape):
+        shift = result = 0
+        while True:
+            b = ord(shape[i]) - 63
+            i += 1
+            result |= (b & 31) << shift
+            shift += 5
+            if b < 32:
+                break
+        lat += ((result >> 1) ^ -(result & 1)) / 1e6
+        shift = result = 0
+        while True:
+            b = ord(shape[i]) - 63
+            i += 1
+            result |= (b & 31) << shift
+            shift += 5
+            if b < 32:
+                break
+        lon += ((result >> 1) ^ -(result & 1)) / 1e6
+        pts.append((lat, lon))
+    return pts
+
+
 def _polyline(trip: dict) -> list[tuple[float, float]]:
-    """Concatenate maneuver shapes (Valhalla shape strings are 'lat,lon,lat,lon,...')."""
+    """Concatenate leg shapes (raw pairs or polyline6, depending on the build)."""
     pts: list[tuple[float, float]] = []
     for leg in trip.get("legs") or []:
-        for mv in leg.get("maneuvers") or []:
-            shape = mv.get("shape")
-            if not shape:
-                continue
-            nums = [float(x) for x in shape.split(",")]
-            for i in range(0, len(nums) - 1, 2):
-                pts.append((nums[i], nums[i + 1]))
+        shape = leg.get("shape")
+        if shape:
+            pts.extend(_decode_shape(shape))
     return pts
 
 
@@ -108,16 +138,18 @@ class ValhallaClient:
         self.timeout = timeout
 
     def route(self, points: list[tuple[float, float]], costing: str, options: dict, exclusions: dict) -> list[dict]:
+        # exclude_polygons goes in the costing options so edges inside the
+        # blocked areas are skipped during routing (top-level exclude_* is
+        # placement-only and this build segfaults on exclude_locations).
+        costing_options = dict(options)
+        if exclusions.get("exclude_polygons"):
+            costing_options["exclude_polygons"] = exclusions["exclude_polygons"]
         body: dict[str, Any] = {
             "locations": [{"lat": p[0], "lon": p[1]} for p in points],
             "costing": costing,
-            "costing_options": {costing: options},
+            "costing_options": {costing: costing_options},
             "format": "json",
         }
-        if exclusions.get("exclude_locations"):
-            body["exclude_locations"] = exclusions["exclude_locations"]
-        if exclusions.get("exclude_polygons"):
-            body["exclude_polygons"] = exclusions["exclude_polygons"]
         try:
             resp = httpx.post(f"{self.url}/route", json=body, timeout=self.timeout)
         except httpx.HTTPError as exc:
@@ -126,10 +158,23 @@ class ValhallaClient:
             raise RoutingError(f"Valhalla HTTP {resp.status_code}: {resp.text[:200]}")
         trip = resp.json().get("trip") or {}
         summary = trip.get("summary") or {}
-        legs = summary.get("legs") or []
+        legs = trip.get("legs") or []
+        # This build reports leg lengths in kilometres (trip.units ==
+        # "kilometers") under summary.length; older Valhalla used summary
+        # .distance in metres — accept both.
+        km_scale = 1.0 if trip.get("units") == "kilometers" else 0.001
+
+        def _km(obj: dict) -> float:
+            if "distance" in obj:
+                return float(obj["distance"]) / 1000.0
+            return float(obj.get("length", 0)) * km_scale
+
+        def _minutes(obj: dict) -> float:
+            return float(obj.get("time", 0)) / 60.0
+
         if not legs:
-            km = float(summary.get("distance", 0)) / 1000.0
-            minutes = float(summary.get("time", 0)) / 60.0
+            km = _km(summary)
+            minutes = _minutes(summary)
             if km <= 0:
                 raise RoutingError("Valhalla returned an empty route")
             poly = _polyline(trip)
@@ -137,8 +182,8 @@ class ValhallaClient:
             return [_leg(points[0], points[-1], km, minutes, geom, "valhalla")]
 
         poly = _polyline(trip)
-        dists = [float(l.get("distance", 0)) / 1000.0 for l in legs]
-        times = [float(l.get("time", 0)) / 60.0 for l in legs]
+        dists = [_km(l.get("summary") or {}) for l in legs]
+        times = [_minutes(l.get("summary") or {}) for l in legs]
         poly_len = sum(haversine_km(p, q) for p, q in zip(poly, poly[1:])) or 1.0
         route_len = sum(dists) or 1.0
         out: list[dict] = []
@@ -186,17 +231,39 @@ def build_route(
 
     mode = provider or str(config.get("routing.provider", "estimate"))
     warnings: list[str] = []
+
+    # Valhalla cannot place a routing endpoint inside an excluded polygon and
+    # crashes the service when asked (SIGSEGV in this build), so endpoints
+    # covered by a verified restriction route on the estimate fallback instead.
+    blocked = [r["id"] for r in restrictions if any(blocks(r, pt[0], pt[1]) for pt in points)]
+    if blocked:
+        mode = "estimate"
+        warnings.append(
+            "titik rute berada dalam pembatasan terverifikasi (" + ", ".join(blocked) + ") — pakai estimasi"
+        )
     legs: list[dict] = []
 
     if mode == "valhalla":
         costing, options = costing_for(config, veh, profile)
+        # Truck costing + polygon excludes SIGSEGV this Valhalla build (any
+        # exclude field), so trucks route without excludes and get the
+        # blocked_penalty ETA inflation below instead; auto/motorcycle exclude.
+        send_exclusions = {} if costing == "truck" else exclusions
         try:
             legs = ValhallaClient(str(config.get("routing.valhalla_url", "http://127.0.0.1:8081"))).route(
-                points, costing, options, exclusions
+                points, costing, options, send_exclusions
             )
         except RoutingError as exc:
             mode = "estimate"
             warnings.append(f"Valhalla belum tersedia — pakai estimasi: {exc}")
+        else:
+            penalty = float(config.get("routing.fallback.blocked_penalty", 1.6))
+            for leg in legs:
+                pts = leg.get("geometry") or []
+                hits = [r["id"] for r in restrictions if any(blocks(r, p[0], p[1]) for p in pts)]
+                if hits:
+                    leg["minutes"] = round(leg["minutes"] * penalty, 1)
+                    warnings.append("rute melewati pembatasan jalan (" + ", ".join(hits) + ")")
 
     if mode != "valhalla":
         legs = []

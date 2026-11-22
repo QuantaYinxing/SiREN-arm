@@ -1,6 +1,6 @@
 {
   "type": "FeatureCollection",
-  "name": "SiREN basemap schematic (Garut area, offline)",
+  "name": "SiREN basemap schematic (Tasikmalaya area, offline fallback)",
   "features": [
     {"type": "Feature", "properties": {"kind": "road", "major": false, "name": "Jl. Garuda"},
      "geometry": {"type": "LineString", "coordinates": [[107.6625, -7.102], [107.7925, -7.102]]}},

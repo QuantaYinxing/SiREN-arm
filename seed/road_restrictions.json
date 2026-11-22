@@ -2,21 +2,22 @@
   {
     "id": "r1",
     "kind": "polygon",
+    "//": "ASSUMPTION: placeholder flood zone south of the real HQ; needs field verification (docs/next-real-maps_done.md INPUT).",
     "geometry": {
       "kind": "polygon",
-      "coordinates": [[-7.186, 107.7225], [-7.186, 107.74375], [-7.214, 107.74375], [-7.214, 107.7225]]
+      "coordinates": [[-7.336, 108.20], [-7.336, 108.222], [-7.364, 108.222], [-7.364, 108.20]]
     },
     "reason": "flood",
     "affected_vehicle_type": "truck",
     "status": "verified",
     "reported_by": null,
     "reported_member_id": null,
-    "note": "Genangan banjir · truk tidak lewat"
+    "note": "Genangan banjir · truk tidak lewat (placeholder, needs field survey)"
   },
   {
     "id": "r2",
     "kind": "point",
-    "geometry": {"kind": "point", "coordinates": [[-7.13, 107.6625]]},
+    "geometry": {"kind": "point", "coordinates": [[-7.288, 108.246]]},
     "reason": "narrow",
     "affected_vehicle_type": "truck",
     "status": "pending",
