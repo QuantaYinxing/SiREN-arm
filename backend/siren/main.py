@@ -73,11 +73,17 @@ def build_app(
     store.load_seed(Path(seed_dir or os.environ.get("SIREN_SEED") or DEFAULT_SEED))
 
     hub = Hub(store, config)
-    sim = None
     if mode == "game":
         if now is None:
-            clock["get"] = GameClock(speed=lambda: float(store.config.get("game.speed", 1)))
+            clock["get"] = GameClock(speed=lambda: float(store.config.get("game.speed", 8)))
         sim = Simulator(store, config, hub)
+    else:
+        if now is None:
+            # Real mode: the clock is real time; app.mock scales it by game.speed and lets
+            # the simulator generate synthetic incidents/crew movement for demo and testing.
+            clock["get"] = GameClock(speed=lambda: float(store.config.get("game.speed", 8))
+                                     if store.config.get("app.mock", False) else 1.0)
+        sim = Simulator(store, config, hub)  # idle until app.mock is turned on
 
     app = create_app(store, config, hub=hub, sim=sim)
     hub.attach(app)

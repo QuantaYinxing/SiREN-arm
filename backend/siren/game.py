@@ -24,7 +24,7 @@ INCIDENT_TIMESTAMPS = {"Dispatched": "dispatched_at", "OnScene": "arrived_at",
 
 
 class GameClock:
-    """Monotonic virtual clock: real seconds scaled by game.speed (1/2/4/8), UTC datetimes."""
+    """Monotonic virtual clock: real seconds scaled by game.speed (config game_speed values), UTC datetimes."""
 
     def __init__(self, base: float | None = None, speed: Callable[[], float] | None = None) -> None:
         self._base = base if base is not None else time.time()
@@ -141,8 +141,13 @@ class Simulator:
         import asyncio
 
         while True:
-            tick = max(0.2, float(self.store.config.get("game.tick_seconds", 1)))
-            speed = max(1.0, float(self.store.config.get("game.speed", 1)))
+            cfg = self.store.config
+            # real mode stays idle until app.mock is turned on (demo/testing switch)
+            if cfg.get("app.mode") == "real" and not cfg.get("app.mock", False):
+                await asyncio.sleep(max(0.5, float(cfg.get("game.tick_seconds", 1))))
+                continue
+            tick = max(0.2, float(cfg.get("game.tick_seconds", 1)))
+            speed = max(1.0, float(cfg.get("game.speed", 8)))
             await asyncio.sleep(tick / speed)
             self.tick(self.store.now_seconds())
 

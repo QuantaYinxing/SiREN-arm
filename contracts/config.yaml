@@ -138,15 +138,17 @@ restriction_status:
 
 restriction_kinds: [point, line, polygon]
 restriction_affects: [truck, motorbike, patrol_car, all]
-game_speed: [1, 2, 4, 8]
+game_speed: [8, 16, 32, 64]
 
 app:
   mode: real            # real | game — game = synthetic scenario, no internet needed (docs/siren.md §9)
+  mock: false           # real mode: synthetic incidents + crew movement via the simulator,
+                        # clock scaled by game.speed — demo/testing without live crews
 
 game:
   seed: 20261120        # fixed RNG seed: the scenario replays identically (game mode doubles as test mode)
   tick_seconds: 1       # simulator wake interval in real time
-  speed: 1              # virtual clock multiplier, UI control via PUT /config/game.speed
+  speed: 8              # virtual clock multiplier, UI control via PUT /config/game.speed
   incident_interval_minutes: 8
   departure_delay_minutes: 1
   scene_minutes: 12

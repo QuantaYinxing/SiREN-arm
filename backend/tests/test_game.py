@@ -47,6 +47,24 @@ def login(client, username="operator", password="siren-dev") -> dict:
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
+def test_mock_toggle_in_real_mode(tmp_path):
+    client, store, hub, clock, app = make_env(tmp_path, mode="real")
+    ops = login(client)
+    st = client.get("/game/state").json()
+    assert st["mode"] == "real" and st["mock"] is False and st["speed"] == 1
+    assert client.put("/config/app.mock", json={"value": "yes"}, headers=ops).status_code == 400
+    assert client.put("/config/app.mock", json={"value": True}, headers=ops).status_code == 200
+    st = client.get("/game/state").json()
+    assert st["mock"] is True and st["speed"] == 8
+    assert client.post("/game/incident", headers=ops).status_code == 201
+    before = len(client.get("/incidents?status=active").json())
+    app.state.sim.tick(clock.advance(12))  # arms the spawn timer (first tick after start)
+    app.state.sim.tick(clock.advance(12))  # timer elapsed -> synthetic incident
+    assert len(client.get("/incidents?status=active").json()) > before
+    assert client.put("/config/app.mock", json={"value": False}, headers=ops).status_code == 200
+    assert client.post("/game/incident", headers=ops).status_code == 404
+
+
 def test_spawn_is_deterministic_for_one_seed(tmp_path):
     client1, store1, hub1, clock1, _ = make_env(tmp_path)
     sim1 = Simulator(store1, store1.config, hub1, seed=4242)
@@ -82,7 +100,7 @@ def test_game_speed_validation_and_effect(tmp_path, monkeypatch):
     ops = login(client)
     bad = client.put("/config/game.speed", json={"value": 6}, headers=ops)
     assert bad.status_code == 400
-    assert bad.json()["allowed"] == [1, 2, 4, 8]
+    assert bad.json()["allowed"] == [8, 16, 32, 64]
     ok = client.put("/config/game.speed", json={"value": 8}, headers=ops)
     assert ok.status_code == 200
     assert store.config.get("game.speed") == 8

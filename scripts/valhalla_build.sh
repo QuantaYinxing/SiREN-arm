@@ -37,6 +37,10 @@ import json, sys
 cfg = json.load(open(sys.argv[1]))
 base = json.load(open(sys.argv[2]))
 cfg["routing"] = base["routing"]
+# Default build_config id_table_size (1.3e9) reserves ~10 GB of edge ids — sized for
+# all of Indonesia; the bbox crop graph is far smaller and the reservation segfaults
+# on laptops under RAM pressure.
+cfg["mjolnir"]["id_table_size"] = 20000000
 # Default build_config points admin/timezone DBs at /data (the container path);
 # the dev build keeps them next to the tiles inside the sandbox.
 cfg["mjolnir"]["admin"] = sys.argv[3] + "/admin.sqlite"

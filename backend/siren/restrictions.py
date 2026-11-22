@@ -1,9 +1,10 @@
-"""Road restrictions (docs/siren.md §5.2): verification queue -> routing exclusions.
+"""Road restrictions (docs/siren.md §5.2): verification queue -> routing penalties.
 
 Only `verified` and not-expired restrictions affect routing. Field reports arrive as
-`pending` and wait for the operator (who may verify is open question §12.6). Verified
-geometry is sent to Valhalla as costing_options exclude_polygons (§5.2); the estimate
-fallback cannot honour excludes, so it flags legs that cross a restriction instead.
+`pending` and wait for the operator (who may verify is open question §12.6). The pinned
+Valhalla build crashes on exclude fields (siren.md L5), so a restriction a route leg
+crosses inflates that leg's minutes via `routing.fallback.blocked_penalty`; blocked
+endpoints fall back to the estimate provider.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import Config
-from .geo import blocks, buffer_line
+from .geo import blocks
 
 VALID_VERIFY_STATUSES = {"verified", "rejected", "expired"}
 
@@ -33,38 +34,6 @@ def selection(
         return rows
     wanted = set(ids)
     return [r for r in rows if r["id"] in wanted]
-
-
-def valhalla_exclusions(restrictions: list[dict]) -> dict[str, Any]:
-    """Map restriction geometry onto Valhalla's costing_options.exclude_polygons.
-
-    point -> small square, polygon -> ring, line -> a buffered polygon (OSM rarely
-    carries road width in Indonesia, so the buffer is the honest approximation).
-    exclude_locations is not used: this Valhalla build segfaults on it, and the
-    squares block edges during routing, which is the point-restriction semantic.
-    """
-    polygons: list[list[list[float]]] = []
-    for r in restrictions:
-        geom = r["geometry"]
-        coords = geom["coordinates"]
-        if geom["kind"] == "point":
-            # Valhalla crashes (SIGSEGV in this build) on exclude_locations, so
-            # a point restriction is sent as a small square blocking the roads
-            # around it (~220 m, matching blocks()'s 0.4 km corridor check).
-            lat, lon = coords[0]
-            d = 0.002
-            polygons.append([[lon - d, lat - d], [lon + d, lat - d], [lon + d, lat + d],
-                             [lon - d, lat + d], [lon - d, lat - d]])
-        else:
-            # Valhalla's exclude_polygons is an array of rings, and each ring is
-            # GeoJSON [lon, lat] pairs (worker.cc parse_ring); our stored coords
-            # are [lat, lon]. Close the ring for safety.
-            raw = coords if geom["kind"] == "polygon" else buffer_line(coords)
-            ring = [[lon, lat] for lat, lon in raw]
-            if ring[0] != ring[-1]:
-                ring.append(ring[0])
-            polygons.append(ring)
-    return {"exclude_polygons": polygons}
 
 
 def sample_leg(a: tuple[float, float], b: tuple[float, float], samples: int = 9) -> list[tuple[float, float]]:

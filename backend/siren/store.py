@@ -16,6 +16,7 @@ import json
 import re
 import secrets
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -250,6 +251,9 @@ class Store:
         self.config = config
         self._now = now or (lambda: datetime.now(timezone.utc))
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        # uvicorn runs sync endpoints in worker threads and app.mock drives the
+        # simulator from the event loop: one shared connection needs a lock.
+        self._lock = threading.RLock()
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.event_buffer_limit = event_buffer_limit
@@ -260,8 +264,9 @@ class Store:
 
     def init_schema(self) -> None:
         """Create tables/indexes from SCHEMA_SQL."""
-        self.conn.executescript(SCHEMA_SQL)
-        self.conn.commit()
+        with self._lock:
+            self.conn.executescript(SCHEMA_SQL)
+            self.conn.commit()
 
     def load_seed(self, seed_dir: Path) -> dict[str, int]:
         """Load seed/*.json (station, teams, accounts, vehicle profiles, vehicles,
@@ -403,13 +408,14 @@ class Store:
                               str(opt.get("gloss", "")), sort, 1))
         for sort, value in enumerate(self.config.get("water_level.reading_sources") or []):
             enum_rows.append(("water_level.reading_sources", str(value), str(value), str(value), sort, 1))
-        for group, value, label, gloss, sort, enabled in enum_rows:
-            self.conn.execute(
-                "INSERT INTO config_enum (group_name, value, label, gloss, sort, enabled)"
-                " VALUES (?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT (group_name, value) DO UPDATE SET label = excluded.label,"
-                " gloss = excluded.gloss, sort = excluded.sort, enabled = excluded.enabled",
-                (group, value, label, gloss, sort, enabled))
+        with self._lock:
+            for group, value, label, gloss, sort, enabled in enum_rows:
+                self.conn.execute(
+                    "INSERT INTO config_enum (group_name, value, label, gloss, sort, enabled)"
+                    " VALUES (?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT (group_name, value) DO UPDATE SET label = excluded.label,"
+                    " gloss = excluded.gloss, sort = excluded.sort, enabled = excluded.enabled",
+                    (group, value, label, gloss, sort, enabled))
 
         key_rows: list[tuple[str, Any]] = []
 
@@ -421,13 +427,14 @@ class Store:
                     key_rows.append((f"{prefix}{key}", value))
 
         walk(self.config.data, "")
-        for key, value in key_rows:
-            self.conn.execute(
-                "INSERT INTO config_key (key, value, updated_at) VALUES (?, ?, ?)"
-                " ON CONFLICT (key) DO UPDATE SET value = excluded.value,"
-                " updated_at = excluded.updated_at",
-                (key, json.dumps(value), now))
-        self.conn.commit()
+        with self._lock:
+            for key, value in key_rows:
+                self.conn.execute(
+                    "INSERT INTO config_key (key, value, updated_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT (key) DO UPDATE SET value = excluded.value,"
+                    " updated_at = excluded.updated_at",
+                    (key, json.dumps(value), now))
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -442,8 +449,9 @@ class Store:
         return now_iso(self._now())
 
     def _rows(self, sql: str, params: tuple = ()) -> list[dict]:
-        cur = self.conn.execute(sql, params)
-        return [dict(r) for r in cur.fetchall()]
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            return [dict(r) for r in cur.fetchall()]
 
     def _row(self, sql: str, params: tuple = ()) -> dict | None:
         rows = self._rows(sql, params)
@@ -452,16 +460,18 @@ class Store:
     def _insert(self, table: str, data: dict) -> None:
         cols = ", ".join(f'"{k}"' for k in data)
         placeholders = ", ".join("?" for _ in data)
-        self.conn.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})', tuple(data.values()))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})', tuple(data.values()))
+            self.conn.commit()
 
     def _update(self, table: str, id_: str, data: dict) -> dict:
         """Update given columns and return the new row. Raises NotFound if absent."""
-        if data:
-            sets = ", ".join(f'"{k}" = ?' for k in data)
-            self.conn.execute(f'UPDATE "{table}" SET {sets} WHERE id = ?', (*data.values(), id_))
-            self.conn.commit()
-        row = self._row(f'SELECT * FROM "{table}" WHERE id = ?', (id_,))
+        with self._lock:
+            if data:
+                sets = ", ".join(f'"{k}" = ?' for k in data)
+                self.conn.execute(f'UPDATE "{table}" SET {sets} WHERE id = ?', (*data.values(), id_))
+                self.conn.commit()
+            row = self._row(f'SELECT * FROM "{table}" WHERE id = ?', (id_,))
         if row is None:
             raise NotFound(f"{table} {id_} not found")
         return row
@@ -612,10 +622,11 @@ class Store:
         data.setdefault("updated_at", self.now_iso())
         self._update("water_source", id_, data)
         if points is not None:
-            self.conn.execute("DELETE FROM water_access_point WHERE water_source_id = ?", (id_,))
-            for pt in points:
-                self._insert("water_access_point", {"id": new_id("wap"), "water_source_id": id_,
-                                                    "lat": pt["lat"], "lon": pt["lon"], "note": pt.get("note")})
+            with self._lock:
+                self.conn.execute("DELETE FROM water_access_point WHERE water_source_id = ?", (id_,))
+                for pt in points:
+                    self._insert("water_access_point", {"id": new_id("wap"), "water_source_id": id_,
+                                                        "lat": pt["lat"], "lon": pt["lon"], "note": pt.get("note")})
         return _water_view(self, self._row("SELECT * FROM water_source WHERE id = ?", (id_,)))
 
     def remove_water_source(self, id_: str) -> dict:
@@ -836,8 +847,9 @@ class Store:
         """Delete pings older than config.position.retention_days; returns rows removed."""
         days = float(retention_days) if retention_days is not None else self.config.seconds("position.retention_days")
         cutoff = now_iso(self._now() - timedelta(days=days))
-        cur = self.conn.execute("DELETE FROM position_ping WHERE received_at < ?", (cutoff,))
-        self.conn.commit()
+        with self._lock:
+            cur = self.conn.execute("DELETE FROM position_ping WHERE received_at < ?", (cutoff,))
+            self.conn.commit()
         return cur.rowcount
 
     # ---- restrictions ----
@@ -937,15 +949,17 @@ class Store:
             raise LinkError(f"unknown reporter link {token!r}")
         now = self.now_iso()
         if row["expires_at"] <= now:
-            self.conn.execute("UPDATE reporter_link SET status = 'expired' WHERE token = ?", (token,))
-            self.conn.commit()
+            with self._lock:
+                self.conn.execute("UPDATE reporter_link SET status = 'expired' WHERE token = ?", (token,))
+                self.conn.commit()
             raise LinkError("reporter link expired")
         if row["status"] != "pending":
             raise LinkError(f"reporter link already {row['status']}")
-        self.conn.execute(
-            "UPDATE reporter_link SET status = 'received', used_at = ?, lat = ?, lon = ?, accuracy_m = ?"
-            " WHERE token = ?", (now, lat, lon, accuracy_m, token))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "UPDATE reporter_link SET status = 'received', used_at = ?, lat = ?, lon = ?, accuracy_m = ?"
+                " WHERE token = ?", (now, lat, lon, accuracy_m, token))
+            self.conn.commit()
         data: dict[str, Any] = {"lat": lat, "lon": lon, "reporter_link_id": token}
         if name is not None:
             data["reporter_name"] = name
@@ -1012,16 +1026,18 @@ class Store:
 
     def delete_account(self, id_: str) -> dict:
         row = self.account(id_)
-        self.conn.execute("DELETE FROM account WHERE id = ?", (id_,))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM account WHERE id = ?", (id_,))
+            self.conn.commit()
         return row
 
     def delete_member(self, id_: str) -> dict:
         row = self._row("SELECT * FROM member WHERE id = ?", (id_,))
         if row is None:
             raise NotFound(f"member {id_} not found")
-        self.conn.execute("DELETE FROM member WHERE id = ?", (id_,))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM member WHERE id = ?", (id_,))
+            self.conn.commit()
         return row
 
     # ---- log & WS buffer ----

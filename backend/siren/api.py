@@ -330,7 +330,9 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
         nonlocal config
         account = _account(request, role="operator")
         if key == "game.speed":
-            config.validate("game_speed", int(body.get("value", 1)))
+            config.validate("game_speed", int(body.get("value", config.get("game.speed", 8))))
+        if key == "app.mock" and not isinstance(body.get("value"), bool):
+            raise ValueError("app.mock requires a boolean value")
         config = config.replaced(key, body.get("value"))
         store.config = config
         app.state.config = config
@@ -732,21 +734,24 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
              texts.reporter_location_received(config, inc["id"]), None, inc["id"])
         return inc
 
-    # ---- game mode (dev-only; real mode has no simulator) ----
+    # ---- simulator endpoints (game mode; real mode runs the simulator only under app.mock) ----
 
     @app.post("/game/incident", status_code=201)
     def game_incident(request: Request) -> dict:
-        if app.state.sim is None:
-            raise NotFound("game mode is not enabled")
+        if app.state.sim is None or (config.get("app.mode") != "game" and not config.get("app.mock", False)):
+            raise NotFound("simulator is idle (game mode or app.mock required)")
         return app.state.sim.spawn_now()
 
     @app.get("/game/state")
     def game_state(request: Request) -> dict:
         """Dev-only view: is the simulator running, at what speed, how many ticks."""
-        speed = int(config.get("game.speed", 1))
-        if app.state.sim is None:
-            return {"mode": "real", "speed": speed, "ticks": 0, "virtual_now": store.now_iso()}
-        return {"mode": "game", "speed": speed, "ticks": app.state.sim.ticks,
+        speed = int(config.get("game.speed", 8))
+        ticks = app.state.sim.ticks if app.state.sim is not None else 0
+        if config.get("app.mode") == "game":
+            return {"mode": "game", "mock": True, "speed": speed, "ticks": ticks,
+                    "virtual_now": store.now_iso()}
+        mock = bool(config.get("app.mock", False))
+        return {"mode": "real", "mock": mock, "speed": speed if mock else 1, "ticks": ticks,
                 "virtual_now": store.now_iso()}
 
     # ---- stats ----

@@ -1,13 +1,13 @@
 """Route building: Valhalla truck costing (D1, D4) plus a straight-line estimate fallback.
 
 The vehicle profile comes from the assigned vehicle, never from a user choice (D4).
-Verified road restrictions are sent as costing_options exclude_polygons (§5.2).
-Truck costing cannot take polygon excludes (SIGSEGV in the pinned Valhalla build), so
-truck routes stay on the truck profile and crossing restrictions inflate the ETA via
-`routing.fallback.blocked_penalty` with a warning, like the estimate fallback.
-When Valhalla is not reachable (dev laptop without Docker), `estimate` mode computes
-haversine x detour_factor at an average speed and flags restrictions it cannot avoid —
-the numbers are honest estimates, not real truck routing.
+Verified road restrictions inflate the ETA via `routing.fallback.blocked_penalty` with a
+warning (§5.2); they are NOT sent as exclude_polygons — the pinned Valhalla build SIGSEGVs
+on any exclude field (the tile spatial index sqlite is never built by valhalla_build_tiles),
+which kills the service mid-request. Routes whose endpoints sit inside a blocked polygon go
+to the estimate fallback instead. When Valhalla is not reachable (dev laptop without Docker),
+`estimate` mode computes haversine x detour_factor at an average speed and flags restrictions
+it cannot avoid — the numbers are honest estimates, not real truck routing.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import httpx
 
 from .config import Config
 from .geo import blocks, haversine_km, position
-from .restrictions import crossing, selection, valhalla_exclusions
+from .restrictions import crossing, selection
 from .store import NotFound
 
 # vehicle type -> Valhalla costing name
@@ -137,17 +137,11 @@ class ValhallaClient:
         self.url = url.rstrip("/")
         self.timeout = timeout
 
-    def route(self, points: list[tuple[float, float]], costing: str, options: dict, exclusions: dict) -> list[dict]:
-        # exclude_polygons goes in the costing options so edges inside the
-        # blocked areas are skipped during routing (top-level exclude_* is
-        # placement-only and this build segfaults on exclude_locations).
-        costing_options = dict(options)
-        if exclusions.get("exclude_polygons"):
-            costing_options["exclude_polygons"] = exclusions["exclude_polygons"]
+    def route(self, points: list[tuple[float, float]], costing: str, options: dict) -> list[dict]:
         body: dict[str, Any] = {
             "locations": [{"lat": p[0], "lon": p[1]} for p in points],
             "costing": costing,
-            "costing_options": {costing: costing_options},
+            "costing_options": {costing: options},
             "format": "json",
         }
         try:
@@ -226,15 +220,14 @@ def build_route(
     via_pt = access_point(store.water_source(via_water_source_id), start) if via_water_source_id else None
 
     restrictions = selection(config, store, veh.get("vehicle_type", "truck"), restriction_ids)
-    exclusions = valhalla_exclusions(restrictions)
     points = [start] + ([via_pt] if via_pt else []) + [dest]
 
     mode = provider or str(config.get("routing.provider", "estimate"))
     warnings: list[str] = []
 
-    # Valhalla cannot place a routing endpoint inside an excluded polygon and
-    # crashes the service when asked (SIGSEGV in this build), so endpoints
-    # covered by a verified restriction route on the estimate fallback instead.
+    # A blocked endpoint is unreachable for this vehicle, so it routes on the
+    # estimate fallback instead of letting Valhalla place the endpoint inside
+    # the blocked area (this build crashes when asked to exclude polygons).
     blocked = [r["id"] for r in restrictions if any(blocks(r, pt[0], pt[1]) for pt in points)]
     if blocked:
         mode = "estimate"
@@ -245,13 +238,9 @@ def build_route(
 
     if mode == "valhalla":
         costing, options = costing_for(config, veh, profile)
-        # Truck costing + polygon excludes SIGSEGV this Valhalla build (any
-        # exclude field), so trucks route without excludes and get the
-        # blocked_penalty ETA inflation below instead; auto/motorcycle exclude.
-        send_exclusions = {} if costing == "truck" else exclusions
         try:
             legs = ValhallaClient(str(config.get("routing.valhalla_url", "http://127.0.0.1:8081"))).route(
-                points, costing, options, send_exclusions
+                points, costing, options
             )
         except RoutingError as exc:
             mode = "estimate"

@@ -62,7 +62,7 @@ Object.entries(STC).forEach(([k, v]) => document.documentElement.style.setProper
 
 const ACTIVE = ['Baru', 'Dispatched', 'EnRoute', 'OnScene', 'Returning'];
 let S = null, cfg = null, ws = null, map = null;
-let gameMode = false; // dev signal from GET /game/state — SIREN_MODE env is not in the config dump
+let gameMode = false, mockOn = false; // dev signal from GET /game/state — SIREN_MODE env is not in the config dump
 let sel = { inc: null, m: new Set(), w: null, tab: 'inc' };
 let ui = { dmin: false };
 let pts = { ws: { name: '', type: 'hydrant', lat: '', lon: '', capacity: '', status: 'active' },
@@ -85,7 +85,7 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;'
 const age = (s) => s == null ? '—' : s < 60 ? Math.round(s) + ' dtk' : Math.round(s / 60) + ' mnt';
 const hhmm = (iso) => (iso || '').slice(11, 19);
 const lvLabel = (v) => c('water_level.options')?.[v]?.label ?? v;
-const serverNowMs = () => clockBase.server + (Date.now() - clockBase.local) * (gameMode ? Number(c('game.speed') || 1) : 1);
+const serverNowMs = () => clockBase.server + (Date.now() - clockBase.local) * ((gameMode || mockOn) ? Number(c('game.speed') || 8) : 1);
 const chip = (kind, s, x = '') => `<span class="chip" style="--c:var(--st-${s})">${lab(kind, s)}${x ? ' · ' + x : ''}</span>`;
 function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('on'), 2500); }
 function setPath(obj, key, value) { const parts = key.split('.'); let o = obj; for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]] ??= {}; o[parts.at(-1)] = value; }
@@ -113,7 +113,7 @@ function applySnapshot(p) {
   S = p; cfg = p.config;
   clockBase = { server: Date.parse(p.server_ts), local: Date.now() };
   if (!map) initMap().then(() => paintMap());
-  rest('GET', '/game/state').then((g) => { gameMode = g.mode === 'game'; render(); }).catch(() => { gameMode = false; });
+  rest('GET', '/game/state').then((g) => { gameMode = g.mode === 'game'; mockOn = !!g.mock; render(); }).catch(() => { gameMode = false; });
   render(); paintMap();
 }
 
@@ -369,7 +369,8 @@ const DOCK = [
     ${gameMode ? '<small>Pembuat laporan otomatis (game mode) ada di tombol "Buat laporan" di atas peta.</small>'
       : `<div class="box"><h4>Laporan insiden</h4>
     <div class="row"><select data-p="inc.type">${opts('incident_types', pts.inc.type || (c('incident_types')?.[0] ?? ''))}</select>${in2('inc.address', 'alamat')}</div>
-    <div class="row">${geo('inc')}<button class="btn go" data-a="iadd">Buat insiden</button></div></div>`}`;
+    <div class="row">${geo('inc')}<button class="btn go" data-a="iadd">Buat insiden</button></div></div>
+    ${mockOn ? '<small>Mock aktif: insiden & pergerakan regu sintetis dibuat simulator (tombol Mock di kanan atas); "Buat laporan" menambah satu insiden sintetis.</small>' : ''}`}`;
   } },
   { k: 'stat', l: 'Statistik', r: () => {
     const mx = Math.max(1, ...S.vehicles.map((v) => v.km_today));
@@ -387,10 +388,13 @@ const DOCK = [
 function render() {
   if (!S) return;
   const game = gameMode;
-  $('#speed').innerHTML = game ? (c('game_speed') || [1, 2, 4, 8]).map((v) => `<button data-a="speed" data-v="${v}" class="${c('game.speed') === v ? 'on' : ''}">${v}x</button>`).join('') : '';
+  $('#speed').innerHTML = (game || mockOn)
+    ? (c('game_speed') || [8, 16, 32, 64]).map((v) => `<button data-a="speed" data-v="${v}" class="${c('game.speed') === v ? 'on' : ''}">${v}x</button>`).join('')
+    : '';
+  if (!game) $('#speed').innerHTML += `<button data-a="mock" class="${mockOn ? 'on' : ''}" title="insiden & pergerakan regu sintetis untuk demo/testing">Mock</button>`;
   $('#tl').innerHTML = [['hl', '◧', 'Regu 1', '1'], ['hr', '◨', 'Regu 2', '2'], ['hb', '⬓', 'Dock', '3'], ['fx', '⤢', 'Fokus', 'F']]
     .map(([k, i, l, key]) => `<button data-a="panel" data-v="${k}" aria-pressed="${k === 'fx' ? $('#ops').classList.contains(k) : !$('#ops').classList.contains(k)}" title="${l}">${i} ${l}<kbd>${key}</kbd></button>`).join('')
-    + (game ? '<button data-a="ginc">Buat laporan</button>' : '');
+    + ((game || mockOn) ? '<button data-a="ginc">Buat laporan</button>' : '');
   $('#zm').innerHTML = '<button data-a="zin" aria-label="Zoom in">+</button><button data-a="zout" aria-label="Zoom out">−</button>';
   $('#lgd').innerHTML = [['Insiden', '#fb923c', 'dot'], ['Titik air', '#38bdf8', 'rot'], ['Pembatasan', '#f43f5e', 'sq']]
     .map(([l, col, s]) => `<span><i style="background:${s === 'sq' ? `repeating-linear-gradient(45deg,${col} 0 2px,transparent 2px 5px)` : col};${s === 'dot' ? 'border-radius:50%' : s === 'rot' ? 'transform:rotate(45deg)' : ''}"></i>${l}</span>`).join('');
@@ -419,6 +423,16 @@ const ACT = {
   link: () => { reporterLink(); return 0; },
   ginc: () => { gameIncident(); return 0; },
   speed: (_, v) => { setSpeed(+v); return 0; },
+  mock: async () => {
+    const v = !mockOn;
+    try {
+      await rest('PUT', '/config/app.mock', { value: v });
+      mockOn = v;
+      toast(v ? 'Mock aktif — simulator membuat kejadian sintetis' : 'Mock nonaktif');
+    } catch (err) { toast(errText(err)); }
+    render();
+    return 0;
+  },
   vr: (id) => { verify(id, 'verified'); return 0; },
   rj: (id) => { verify(id, 'rejected'); return 0; },
   pmap: (_, path) => { const ctr = map.getCenter(); setPath(pts, `${path}.lat`, ctr.lat.toFixed(6)); setPath(pts, `${path}.lon`, ctr.lng.toFixed(6)); },

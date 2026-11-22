@@ -98,7 +98,7 @@ def test_seed_content_and_status_consistency(tmp_path):
     assert [t["id"] for t in teams] == ["t1", "t2"]
     assert teams[0]["color"] == "#ff9f68"
     assert store.vehicle_profile("vp_truck")["valhalla_costing"] == {
-        "type": "truck", "use_osm_trucking_on_road": True, "max_haulage_costing": True}
+        "type": "truck", "use_osm_trucking_on_road": False, "max_haulage_costing": True}
     assert store.vehicle("v1")["plate"] == "Z 8123 AB"
     assert store.vehicle("v2")["team_id"] == "t2"
     members = store.members()

@@ -302,8 +302,9 @@ paths:
       tags: [routing]
       summary: >
         Route for a vehicle. Vehicle profile comes from the assigned vehicle (D4), never
-        chosen by the user. Verified road restrictions are applied as Valhalla
-        exclude_polygons / exclude_locations (siren.md §5.2).
+        chosen by the user. Verified road restrictions inflate leg minutes via
+        routing.fallback.blocked_penalty with a warning (siren.md §5.2, L5); an endpoint
+        inside a blocked polygon routes on the estimate fallback.
       requestBody:
         required: true
         content:

@@ -9,7 +9,8 @@
     "length_m": 8.0,
     "gross_weight_kg": 12000,
     "axle_load_kg": 10000,
-    "valhalla_costing": {"type": "truck", "use_osm_trucking_on_road": true, "max_haulage_costing": true}
+    "//valhalla_costing": "use_osm_trucking_on_road=true SIGSEGVs the pinned Valhalla build (edges without truck tags); false routes truck-accessible edges and falls back to estimate elsewhere",
+    "valhalla_costing": {"type": "truck", "use_osm_trucking_on_road": false, "max_haulage_costing": true}
   },
   {
     "id": "vp_moto",

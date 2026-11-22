@@ -70,9 +70,9 @@ const SELF_SET = ['IsiUlang', 'Istirahat'];
 const GPS = { live: ['●', '#34d399'], stale: ['◐', '#fbbf24'], offline: ['○', '#566274'] };
 
 let S = null, cfg = null, ws = null, map = null, sess = null;
-let gameMode = false, sheet = false, ownPos = null, lastPing = 0;
+let gameMode = false, mockOn = false, sheet = false, ownPos = null, lastPing = 0;
 let clockBase = { server: Date.now(), local: Date.now() };
-const serverNowMs = () => clockBase.server + (Date.now() - clockBase.local) * (gameMode ? Number(c('game.speed') || 1) : 1);
+const serverNowMs = () => clockBase.server + (Date.now() - clockBase.local) * ((gameMode || mockOn) ? Number(c('game.speed') || 8) : 1);
 
 const $ = (s) => document.querySelector(s);
 const c = (key) => key.split('.').reduce((o, p) => o?.[p], cfg);
@@ -114,7 +114,7 @@ function fold(ev) {
     S = p; cfg = p.config;
     clockBase = { server: Date.parse(p.server_ts), local: Date.now() };
     if (!map) initMap().then(() => paintMap());
-    rest('GET', '/game/state').then((g) => { gameMode = g.mode === 'game'; render(); }).catch(() => { gameMode = false; });
+    rest('GET', '/game/state').then((g) => { gameMode = g.mode === 'game'; mockOn = !!g.mock; render(); }).catch(() => { gameMode = false; });
     render(); return;
   }
   if (!S) return;

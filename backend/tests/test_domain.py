@@ -9,8 +9,8 @@ import pytest
 
 from fake_store import FakeStore
 from siren.config import Config, ConfigError
-from siren.geo import buffer_line, haversine_km, point_in_ring
-from siren.restrictions import crossing, selection, valhalla_exclusions
+from siren.geo import haversine_km, point_in_ring
+from siren.restrictions import crossing, selection
 from siren.routing import _decode_shape, build_route, costing_for, estimate_leg, water_options
 from siren.state import RELEASE_STATUSES, TransitionError, apply_member_status, check, recompute_incident
 from siren.timeutil import add_minutes
@@ -214,22 +214,6 @@ def test_selection_expires_overdue_restriction():
     assert [r["status"] for r in s.restrictions() if r["id"] == "r3"] == ["expired"]
 
 
-def test_valhalla_exclusions_mapping():
-    ex = valhalla_exclusions([
-        {"geometry": {"kind": "point", "coordinates": [[-7.13, 107.6625]]}},
-        {"geometry": {"kind": "polygon", "coordinates": FLOOD}},
-        {"geometry": {"kind": "line", "coordinates": [[-7.15, 107.70], [-7.16, 107.72]]}},
-    ])
-    assert len(ex["exclude_polygons"]) == 3
-    square = ex["exclude_polygons"][0]
-    assert square[0] == square[-1] and len(square) == 5  # point -> closed blocking square
-    assert square[0] == [107.6625 - 0.002, -7.13 - 0.002]  # [lon,lat] order
-    ring = ex["exclude_polygons"][1]
-    assert ring == [[lon, lat] for lat, lon in FLOOD + [FLOOD[0]]]  # [lon,lat], closed
-    buf = ex["exclude_polygons"][2]
-    assert buf[0] == buf[-1] and all(len(p) == 2 for p in buf)
-
-
 def test_valhalla_shape_decodes_both_encodings():
     prev = [0.0, 0.0]
 
@@ -396,8 +380,3 @@ def test_crossing_detects_restriction_on_a_leg_only():
     hits = crossing(s.active_restrictions("truck"), STATION, INC)
     assert [h["id"] for h in hits] == ["r1"]
     assert crossing(s.active_restrictions("truck"), V1, W3) == []
-
-
-def test_buffer_line_encloses_the_line():
-    buf = buffer_line([[-7.15, 107.70], [-7.16, 107.72]])
-    assert point_in_ring(-7.155, 107.71, buf)

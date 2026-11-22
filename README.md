@@ -83,7 +83,7 @@ passwords are stored hashed and never returned by the API. Everything is operato
 | `backend/tests/` | 101 tests — API contract, state machine, water ranking, routing, store |
 | `seed/` | starter data (HQ station, teams, accounts, vehicles, water sources from OSM) |
 | `apps/` | `ops/`, `field/`, `db/`, shared client + styles, vendored MapLibre, basemap data |
-| `scripts/` | OSM crop, tile build, Valhalla graph build, water seed |
+| `scripts/` | OSM crop, tile build, Valhalla graph build + keep loop, water seed |
 | `infra/` | docker-compose for the future VPS deployment (PostGIS, Valhalla, tile server) |
 | `.sandbox/` | installs and generated data — never committed |
 
@@ -102,6 +102,9 @@ Deterministic: injected clock, estimate provider, SQLite in a temp dir.
 - **L2** OSM rarely carries road-width tags, so restriction verification is operator-side, not automatic.
 - **L3** Valhalla graph builds are memory-hungry; run them with free RAM and `nice`.
 - **L4** dev password `siren-dev` is fine locally; rotate accounts before a public tunnel session.
+- **L5** the pinned Valhalla build SIGSEGVs probabilistically under dev-laptop RAM pressure;
+  `scripts/valhalla_keep.sh` restarts it and routing falls back to `estimate` with a warning
+  while it is down. Production routing belongs on the VPS host.
 
 Spec, decisions and open questions live in `docs/siren.md`; session history in
 `docs/blackbox.md`; binding rules in `docs/rules.md` (`docs/` stays local by design).

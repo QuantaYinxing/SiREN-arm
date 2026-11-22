@@ -91,34 +91,6 @@ def distance_to_line_km(lat: float, lon: float, line: Ring) -> float:
     return min(point_to_segment_km(lat, lon, p, q) for p, q in zip(pts, pts[1:]))
 
 
-def buffer_line(line: Ring, deg: float = 0.0012) -> list[list[float]]:
-    """Approximate a road line as a thin closed polygon (for Valhalla exclude_polygons).
-
-    `deg` 0.0012 ≈ 130 m of road length on either side; a coarse but honest box, since
-    OSM road width data in Indonesia is often missing (docs/siren.md L2).
-    """
-    pts = [(float(p[0]), float(p[1])) for p in line]
-    lats = [p[0] for p in pts]
-    lons = [p[1] for p in pts]
-    minlat, maxlat, minlon, maxlon = min(lats), max(lats), min(lons), max(lons)
-    if len(pts) == 1:
-        minlat -= deg / 2
-        maxlat += deg / 2
-        minlon -= deg / 2
-        maxlon += deg / 2
-    else:
-        # extend along the line direction by deg on both ends, widen perpendicular by deg/2
-        dlat, dlon = pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]
-        n = max(abs(dlat), abs(dlon), 1e-9)
-        dlat, dlon = dlat / n * deg, dlon / n * deg
-        wlat, wlon = -dlon, dlat  # perpendicular
-        minlat -= abs(dlat) + abs(wlat) / 2
-        maxlat += abs(dlat) + abs(wlat) / 2
-        minlon -= abs(dlon) + abs(wlon) / 2
-        maxlon += abs(dlon) + abs(wlon) / 2
-    return [[minlat, minlon], [maxlat, minlon], [maxlat, maxlon], [minlat, maxlon]]
-
-
 def normalize_geometry(obj: dict) -> dict:
     """{"kind": "point|line|polygon", "coordinates": [[lat, lon], ...]}"""
     kind = obj["kind"]
