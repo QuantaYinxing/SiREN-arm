@@ -967,13 +967,14 @@ class Store:
     # ---- accounts ----
 
     def create_account(self, username: str, role: str, password: str, member_id: str | None = None) -> dict:
+        id_ = new_id("acct")
         try:
-            self._insert("account", {"id": new_id("acct"), "username": username, "role": role,
+            self._insert("account", {"id": id_, "username": username, "role": role,
                                      "password_hash": _sha256(password), "member_id": member_id,
                                      "created_at": self.now_iso()})
         except sqlite3.IntegrityError as exc:
             raise Conflict(f"username {username!r} already exists") from exc
-        return self.account_by_username(username)
+        return self.account(id_)
 
     def account_by_username(self, username: str) -> dict | None:
         return self._row("SELECT * FROM account WHERE username = ?", (username,))
@@ -982,6 +983,45 @@ class Store:
         row = self.account_by_username(username)
         if row is None or row["password_hash"] != _sha256(password):
             return None
+        return row
+
+    # ---- account management (DB manager GUI) ----
+
+    def accounts(self) -> list[dict]:
+        """Login rows without the password hash."""
+        return self._rows("SELECT id, username, role, member_id, created_at FROM account ORDER BY username")
+
+    def account(self, id_: str) -> dict:
+        row = self._row("SELECT id, username, role, member_id, created_at FROM account WHERE id = ?", (id_,))
+        if row is None:
+            raise NotFound(f"account {id_} not found")
+        return row
+
+    def update_account(self, id_: str, data: dict) -> dict:
+        """Accepts password (stored hashed), role, member_id."""
+        fields: dict[str, object] = {}
+        if "password" in data:
+            fields["password_hash"] = _sha256(str(data["password"]))
+        if "role" in data:
+            fields["role"] = data["role"]
+        if "member_id" in data:
+            fields["member_id"] = data["member_id"]
+        if fields:
+            self._update("account", id_, fields)
+        return self.account(id_)
+
+    def delete_account(self, id_: str) -> dict:
+        row = self.account(id_)
+        self.conn.execute("DELETE FROM account WHERE id = ?", (id_,))
+        self.conn.commit()
+        return row
+
+    def delete_member(self, id_: str) -> dict:
+        row = self._row("SELECT * FROM member WHERE id = ?", (id_,))
+        if row is None:
+            raise NotFound(f"member {id_} not found")
+        self.conn.execute("DELETE FROM member WHERE id = ?", (id_,))
+        self.conn.commit()
         return row
 
     # ---- log & WS buffer ----

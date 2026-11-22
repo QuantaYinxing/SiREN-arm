@@ -216,6 +216,59 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
         ACCESS_TOKENS[access] = account
         return {"token": access, "refresh_token": body["refresh_token"]}
 
+    # ---- accounts (DB manager GUI) ----
+
+    @app.get("/accounts")
+    def accounts(request: Request) -> list[dict]:
+        _account(request, role="operator")
+        return store.accounts()
+
+    @app.post("/accounts", status_code=201)
+    def create_account(request: Request, body: dict = Body(...)) -> dict:
+        actor = _account(request, role="operator")
+        username, password = body.get("username"), body.get("password")
+        if not username or not password:
+            raise ValueError("username and password are required")
+        role = body.get("role", "officer")
+        config.validate("auth.roles", role)
+        if body.get("member_id"):
+            store.member(body["member_id"])
+        row = store.create_account(username, role, password, body.get("member_id"))
+        emit(request, "account.updated", {"username": row["username"], "role": row["role"]},
+             f"Akun {row['username']} ({row['role']}) dibuat", account=actor)
+        return row
+
+    @app.patch("/accounts/{id}")
+    def update_account(request: Request, id: str, body: dict = Body(...)) -> dict:
+        actor = _account(request, role="operator")
+        if "role" in body:
+            config.validate("auth.roles", body["role"])
+        if body.get("member_id"):
+            store.member(body["member_id"])
+        row = store.update_account(id, body)
+        emit(request, "account.updated", {"username": row["username"]},
+             f"Akun {row['username']} diubah", account=actor)
+        return row
+
+    @app.delete("/accounts/{id}")
+    def delete_account(request: Request, id: str) -> dict:
+        actor = _account(request, role="operator")
+        row = store.delete_account(id)
+        emit(request, "account.updated", {"username": row["username"], "removed": True},
+             f"Akun {row['username']} dihapus", account=actor)
+        return {"username": row["username"], "removed": True}
+
+    @app.delete("/members/{id}")
+    def remove_member(request: Request, id: str) -> dict:
+        actor = _account(request, role="operator")
+        busy = [a for a in store.assignments() if a["member_id"] == id and a["status"] in state_mod.ACTIVE_ASSIGNMENT]
+        if busy:
+            raise Busy(f"member {id} masih ditugaskan di {busy[0]['incident_id']}")
+        row = store.delete_member(id)
+        emit(request, "member.updated", {"member_id": id, "name": row["name"], "removed": True},
+             f"Anggota {row['name']} dihapus", account=actor)
+        return {"id": id, "name": row["name"], "removed": True}
+
     # ---- config ----
 
     @app.get("/config")
@@ -228,6 +281,49 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
         if value is None:
             raise NotFound(f"unknown config key {key}")
         return {"key": key, "value": value}
+
+    # ---- PMTiles basemap (byte-range serving; the pmtiles protocol needs 206) ----
+
+    @app.get("/tiles/{name}")
+    def tiles_range(request: Request, name: str):
+        from pathlib import Path
+
+        import mimetypes
+
+        from fastapi.responses import Response
+
+        # Only plain filenames — no traversal out of the tiles dir.
+        if "/" in name or ".." in name:
+            raise NotFound(f"unknown tile archive {name}")
+        path = Path(__file__).resolve().parents[2] / ".sandbox" / "data" / "tiles" / name
+        if not path.is_file():
+            raise NotFound(f"unknown tile archive {name}")
+        size = path.stat().st_size
+        range_header = request.headers.get("range")
+        start, end = 0, size - 1
+        status = 200
+        if range_header and range_header.startswith("bytes="):
+            first = range_header[len("bytes="):].split(",")[0]
+            lo, _, hi = first.partition("-")
+            if not lo:  # suffix range: last N bytes
+                start = max(0, size - int(hi))
+                end = size - 1
+            else:
+                start = int(lo)
+                if hi:
+                    end = min(int(hi), size - 1)
+            status = 206
+        with path.open("rb") as f:
+            f.seek(start)
+            body = f.read(end - start + 1)
+        headers = {
+            "Content-Type": mimetypes.guess_type(name)[0] or "application/octet-stream",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(len(body)),
+        }
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        return Response(content=body, status_code=status, headers=headers)
 
     @app.put("/config/{key}")
     def config_put(request: Request, key: str, body: dict = Body(...)) -> dict:

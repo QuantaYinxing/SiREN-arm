@@ -5,6 +5,7 @@ and the WebSocket hub. SQLite dev store, estimate routing provider, injected clo
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -68,6 +69,50 @@ def test_login_returns_token_and_role(env):
     assert body_officer["role"] == "officer" and body_officer["member_id"] == "A"
 
 
+def test_account_crud_and_reauthentication(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    created = client.post("/accounts",
+                          json={"username": "g.gigi", "password": "dev2", "role": "officer", "member_id": "A"},
+                          headers=ops)
+    assert created.status_code == 201, created.text
+    row = created.json()
+    assert row["username"] == "g.gigi" and row["member_id"] == "A" and "password_hash" not in row
+    _, off = login(client, "g.gigi", "dev2")
+    assert off["role"] == "officer" and off["member_id"] == "A"
+    dup = client.post("/accounts", json={"username": "g.gigi", "password": "x"}, headers=ops)
+    assert dup.status_code == 400 and dup.json()["error"] == "conflict"
+    assert client.post("/accounts", json={"username": "h.hari", "password": "x", "role": "reporter"}, headers=ops).status_code == 400
+    assert client.patch(f"/accounts/{row['id']}", json={"password": "dev3"}, headers=ops).status_code == 200
+    assert client.post("/auth/login", json={"username": "g.gigi", "password": "dev2"}).status_code == 401
+    _, rotated = login(client, "g.gigi", "dev3")
+    assert rotated["role"] == "officer"
+    assert client.delete(f"/accounts/{row['id']}", headers=ops).status_code == 200
+    assert client.post("/auth/login", json={"username": "g.gigi", "password": "dev3"}).status_code == 401
+    assert "g.gigi" not in [a["username"] for a in client.get("/accounts", headers=ops).json()]
+
+
+def test_accounts_require_operator(env):
+    client, store, hub, clock = env
+    officer, _ = login(client, "a.asep")
+    assert client.get("/accounts", headers=officer).status_code == 403
+    assert client.post("/accounts", json={"username": "x", "password": "y"}, headers=officer).status_code == 403
+
+
+def test_member_add_delete_and_busy_guard(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    m = client.post("/members", json={"name": "Orang Baru", "team_id": "t1", "role": "pemadam"}, headers=ops)
+    assert m.status_code == 201, m.text
+    mid = m.json()["id"]
+    assert client.delete(f"/members/{mid}", headers=ops).status_code == 200
+    assert client.get(f"/members/{mid}", headers=ops).status_code == 404
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.102, "lon": 107.77}, headers=ops).json()["id"]
+    client.post(f"/incidents/{iid}/assignments", json={"members": ["A"], "vehicle_id": "v1", "water_source_id": "w1"}, headers=ops)
+    assert client.delete("/members/A", headers=ops).status_code == 409
+    assert store.member("A") is not None
+
+
 def test_config_put_requires_operator(env):
     client, store, hub, clock = env
     ops, _ = login(client, "operator")
@@ -91,8 +136,9 @@ def test_snapshot_matches_contract_shape(env):
     assert {t["name"] for t in snap["teams"]} == {"Regu 1", "Regu 2"}
     assert {m["id"] for m in snap["members"]} == {"A", "B", "C", "D", "E", "F"}
     assert all(m["freshness"] in {"live", "stale", "offline"} for m in snap["members"])
-    assert [w["name"] for w in snap["water_sources"] if w["status"] == "active"] == [
-        "Hidran Pasar Cikurubuk", "Sungai Ciwulan", "Kolam Taman Kota"]
+    seed_water = json.loads((REPO_ROOT / "seed" / "water_sources.json").read_text())
+    assert sorted(w["name"] for w in snap["water_sources"] if w["status"] == "active") == sorted(
+        w["name"] for w in seed_water)
 
 
 # ---- master data ----
@@ -258,11 +304,33 @@ def test_route_endpoint_applies_verified_restrictions(env):
     client, store, hub, clock = env
     ops, _ = login(client, "operator")
     route = client.post("/routing/route", json={"vehicle_id": "v2",
-                                                "to": {"lat": -7.102, "lon": 107.77}}, headers=ops).json()
+                                                "to": {"lat": -7.38, "lon": 108.211}}, headers=ops).json()
     assert route["applied_restrictions"] == ["r1"]
     assert route["provider"] == "estimate"
     assert route["legs"][0]["minutes"] > 0
     assert any("r1" in w for w in route["warnings"])
+
+
+def test_tiles_byte_range_serving(env, tmp_path):
+    client, _store, _hub, _clock = env
+    tiles_dir = REPO_ROOT / ".sandbox" / "data" / "tiles"
+    tiles_dir.mkdir(parents=True, exist_ok=True)
+    archive = tiles_dir / "test-range.pmtiles"
+    archive.write_bytes(b"PMT" + bytes(range(256)) * 4)  # 1027 bytes
+    try:
+        full = client.get("/tiles/test-range.pmtiles")
+        assert full.status_code == 200 and full.content == archive.read_bytes()
+        assert full.headers["accept-ranges"] == "bytes"
+        part = client.get("/tiles/test-range.pmtiles", headers={"Range": "bytes=4-11"})
+        assert part.status_code == 206
+        assert part.content == archive.read_bytes()[4:12]
+        assert part.headers["content-range"] == f"bytes 4-11/{archive.stat().st_size}"
+        suffix = client.get("/tiles/test-range.pmtiles", headers={"Range": "bytes=-8"})
+        assert suffix.status_code == 206 and suffix.content == archive.read_bytes()[-8:]
+        assert client.get("/tiles/nope.pmtiles").status_code == 404
+        assert client.get("/tiles/../etc/passwd").status_code in (404, 422)
+    finally:
+        archive.unlink()
 
 
 def test_water_source_options_endpoint(env):
@@ -284,7 +352,7 @@ def test_water_source_options_endpoint(env):
     assert len(full["options"]) <= 3
     assert full["options"][0]["rank"] == 1
     assert full["options"][0]["score_minutes"] == full["options"][0]["b"]["minutes"]
-    assert "w4" not in [o["water_source_id"] for o in full["options"]]
+    assert all(o["status"] == "active" for o in full["options"])
     client.post("/vehicles/v1/water-level", json={"level": 1, "source": "officer"}, headers=ops)
     low = client.post("/routing/water-source-options", json={"vehicle_id": "v1", "incident_id": iid},
                       headers=ops).json()

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SiREN — Database</title>
+<link rel="stylesheet" href="/shared/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="logo">Si<b>REN</b> <span class="mu" style="font-weight:500">Database</span></div>
+  <div class="kpis">
+    <div class="kpi"><b id="cnt">—</b><small>akun</small></div>
+    <div class="kpi"><b id="mcnt">—</b><small>anggota</small></div>
+    <div class="kpi" style="min-width:140px"><small class="mono" id="who"></small></div>
+  </div>
+</header>
+
+<div class="login" id="login">
+  <form class="card" id="loginform">
+    <h2>Login operator</h2>
+    <div class="row"><input id="lu" placeholder="username" autocomplete="username"></div>
+    <div class="row"><input id="lp" type="password" placeholder="password" autocomplete="current-password"></div>
+    <button class="btn go" type="submit">Masuk</button>
+  </form>
+</div>
+
+<main id="app" style="display:none;flex:1;min-height:0;overflow:auto;padding:16px;gap:12px">
+  <div class="box">
+    <h4>Akun login</h4>
+    <div id="accrows" style="display:flex;flex-direction:column;gap:4px"></div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap">
+      <input id="au" placeholder="username baru" style="min-width:140px">
+      <input id="ap" placeholder="password" style="min-width:140px">
+      <select id="ar"></select>
+      <select id="am"></select>
+      <button class="btn go" id="ba">Tambah akun</button>
+    </div>
+  </div>
+  <div class="box">
+    <h4>Anggota (regu)</h4>
+    <div id="mrows" style="display:flex;flex-direction:column;gap:4px"></div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap">
+      <input id="mn" placeholder="nama anggota" style="min-width:140px">
+      <select id="mt"></select>
+      <select id="mr"></select>
+      <button class="btn go" id="bm">Tambah anggota</button>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script type="module">
+import { login, loadCredentials, rest, errText } from '/shared/api.js';
+
+const $ = (s) => document.querySelector(s);
+let accs = [], mems = [], teams = [], roles = [], rmem = {};
+
+function toast(t) {
+  $('#toast').textContent = t;
+  $('#toast').classList.add('on');
+  setTimeout(() => $('#toast').classList.remove('on'), 2200);
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function teamName(id) {
+  const t = teams.find((x) => x.id === id);
+  return t ? t.name : id;
+}
+function memberName(id) {
+  const m = mems.find((x) => x.id === id);
+  return m ? `${m.name} (${m.id})` : id;
+}
+
+async function load() {
+  accs = await rest('GET', '/accounts');
+  mems = await rest('GET', '/members');
+  teams = await rest('GET', '/teams');
+  roles = (await rest('GET', '/config/auth.roles')).value;
+  rmem = (await rest('GET', '/config/roles_member')).value;
+  render();
+}
+
+function render() {
+  $('#cnt').textContent = accs.length;
+  $('#mcnt').textContent = mems.length;
+  $('#accrows').innerHTML = accs.map((a) => `<div class="rw" style="grid-template-columns:1fr 110px 1fr 170px auto">
+    <b>${esc(a.username)}</b>
+    <span class="chip" style="--c:var(--wat)">${esc(a.role)}</span>
+    <span class="mu mono">${a.member_id ? esc(memberName(a.member_id)) : 'tanpa anggota'}</span>
+    <input data-pw="${a.id}" placeholder="password baru">
+    <span class="mini"><button class="btn" data-op="pw" data-id="${a.id}">Simpan</button><button class="btn" data-op="del" data-id="${a.id}">Hapus</button></span>
+  </div>`).join('') || '<div class="mu">tidak ada akun</div>';
+  $('#mrows').innerHTML = mems.map((m) => `<div class="rw" style="grid-template-columns:1fr 1fr 1fr 110px auto">
+    <b>${esc(m.name)}</b>
+    <span class="mu">${esc(teamName(m.team_id))}</span>
+    <span class="mu">${esc(rmem[m.role]?.label ?? m.role ?? '—')}</span>
+    <span class="chip" style="--c:var(--acc)">${esc(m.status)}</span>
+    <button class="btn" data-op="mdel" data-id="${m.id}">Hapus</button>
+  </div>`).join('') || '<div class="mu">tidak ada anggota</div>';
+  $('#ar').innerHTML = roles.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  $('#am').innerHTML = '<option value="">tanpa anggota</option>' +
+    mems.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${esc(m.id)})</option>`).join('');
+  $('#mt').innerHTML = teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} (${esc(t.id)})</option>`).join('');
+  $('#mr').innerHTML = Object.entries(rmem).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label ?? k)}</option>`).join('');
+}
+
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-op]');
+  if (!b) return;
+  try {
+    if (b.dataset.op === 'del') {
+      await rest('DELETE', `/accounts/${b.dataset.id}`);
+      toast('akun dihapus');
+      await load();
+    } else if (b.dataset.op === 'pw') {
+      const pw = $(`input[data-pw="${b.dataset.id}"]`)?.value;
+      if (!pw) { toast('isi password baru dulu'); return; }
+      await rest('PATCH', `/accounts/${b.dataset.id}`, { password: pw });
+      toast('password diganti');
+    } else if (b.dataset.op === 'mdel') {
+      await rest('DELETE', `/members/${b.dataset.id}`);
+      toast('anggota dihapus');
+      await load();
+    }
+  } catch (err) { toast(errText(err)); }
+});
+
+$('#ba').addEventListener('click', async () => {
+  try {
+    const body = { username: $('#au').value, password: $('#ap').value, role: $('#ar').value };
+    if ($('#am').value) body.member_id = $('#am').value;
+    await rest('POST', '/accounts', body);
+    $('#au').value = $('#ap').value = '';
+    toast('akun dibuat');
+    await load();
+  } catch (err) { toast(errText(err)); }
+});
+
+$('#bm').addEventListener('click', async () => {
+  try {
+    await rest('POST', '/members', { name: $('#mn').value, team_id: $('#mt').value, role: $('#mr').value });
+    $('#mn').value = '';
+    toast('anggota dibuat');
+    await load();
+  } catch (err) { toast(errText(err)); }
+});
+
+async function enter() {
+  const sess = await login('db', $('#lu').value, $('#lp').value);
+  if (sess.role !== 'operator') { toast('halaman ini khusus akun operator'); return; }
+  $('#login').style.display = 'none';
+  $('#app').style.display = 'flex';
+  $('#who').textContent = sess.username;
+  await load();
+}
+
+$('#loginform').addEventListener('submit', (e) => {
+  e.preventDefault();
+  enter().catch((err) => toast(errText(err)));
+});
+
+const cred = loadCredentials();
+if (cred?.app === 'db') { $('#lu').value = cred.username; $('#lp').value = cred.password; }
+</script>
+</body>
+</html>

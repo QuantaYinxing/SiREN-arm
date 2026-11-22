@@ -247,6 +247,14 @@
       "payload": {"type": "object", "required": ["water_source"], "properties": {"water_source": {"$ref": "#/defs/waterSource"}, "removed": {"type": "boolean"}}, "additionalProperties": false}
     },
     {
+      "type": "account.updated",
+      "payload": {"type": "object", "required": ["username"], "properties": {"username": {"type": "string"}, "role": {"type": ["string", "null"]}, "removed": {"type": "boolean"}}, "additionalProperties": false}
+    },
+    {
+      "type": "member.updated",
+      "payload": {"type": "object", "required": ["member_id"], "properties": {"member_id": {"type": "string"}, "name": {"type": ["string", "null"]}, "removed": {"type": "boolean"}}, "additionalProperties": false}
+    },
+    {
       "type": "config.updated",
       "payload": {"type": "object", "required": ["key", "value"], "properties": {"key": {"type": "string"}, "value": {}}, "additionalProperties": false}
     }

@@ -46,6 +46,7 @@
 <div id="toast" role="status"></div>
 
 <script src="/vendor/maplibre-gl.js"></script>
+<script src="/vendor/pmtiles.js"></script>
 <script type="module">
 import { login, loadSession, ensureSession, rest, connectWS, errText } from '/shared/api.js';
 import { createMap, mapData, applyMap } from '/shared/map.js';
@@ -64,6 +65,9 @@ let S = null, cfg = null, ws = null, map = null;
 let gameMode = false; // dev signal from GET /game/state — SIREN_MODE env is not in the config dump
 let sel = { inc: null, m: new Set(), w: null, tab: 'inc' };
 let ui = { dmin: false };
+let pts = { ws: { name: '', type: 'hydrant', lat: '', lon: '', capacity: '', status: 'active' },
+  r: { reason: 'flood', lat: '', lon: '' },
+  inc: { type: '', address: '', lat: '', lon: '' } };
 let reco = null, preview = null, previewTimer = null, vehTimer = null;
 let clockBase = { server: Date.now(), local: Date.now() };
 
@@ -77,6 +81,7 @@ const pending = () => S.road_restrictions.filter((r) => r.status === 'pending');
 const c = (key) => key.split('.').reduce((o, p) => o?.[p], cfg);
 const lab = (kind, s) => c(kind)?.[s]?.label ?? s;
 const fk = (n) => Number(n).toFixed(1).replace('.', ',');
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const age = (s) => s == null ? '—' : s < 60 ? Math.round(s) + ' dtk' : Math.round(s / 60) + ' mnt';
 const hhmm = (iso) => (iso || '').slice(11, 19);
 const lvLabel = (v) => c('water_level.options')?.[v]?.label ?? v;
@@ -133,6 +138,7 @@ function fold(ev) {
     case 'restriction.updated': upsert(S.road_restrictions, p.restriction); break;
     case 'waterSource.updated': if (p.removed) S.water_sources = S.water_sources.filter((w) => w.id !== p.water_source.id); else upsert(S.water_sources, p.water_source); break;
     case 'config.updated': setPath(cfg, p.key, p.value); break;
+    case 'member.updated': if (p.removed) { S.members = S.members.filter((m) => m.id !== p.member_id); refreshVehicles(); } break;
   }
   if (ev.type !== 'member.position') logLine(ev);
   render(); paintMap();
@@ -149,6 +155,8 @@ function logLine(ev) {
     'restriction.reported': () => `${lab('restriction_reason', p.restriction.reason)} (menunggu verifikasi)`,
     'restriction.updated': () => `pembatasan ${p.restriction_id} → ${lab('restriction_status', p.status)}`,
     'config.updated': () => `konfigurasi ${p.key} = ${JSON.stringify(p.value)}`,
+    'account.updated': () => `akun ${p.username}${p.removed ? ' dihapus' : p.role ? ` (${p.role})` : ''}`,
+    'member.updated': () => `anggota ${p.name ?? p.member_id}${p.removed ? ' dihapus' : ''}`,
   })[ev.type]?.() ?? ev.type;
   S.event_log.unshift({ ts: ev.ts, type: ev.type, text });
   if (S.event_log.length > 120) S.event_log.length = 120;
@@ -341,6 +349,28 @@ const DOCK = [
     const kindChip = r.status === 'verified' ? 'OnScene' : r.status === 'pending' ? 'Dispatched' : 'Offline';
     return rowHTML('1fr 130px 90px 160px', `<span>${lab('restriction_reason', r.reason)}${r.note ? ' · ' + r.note : ''}<br><small>oleh ${by} · ${hhmm(r.reported_at)} · untuk ${lab('restriction_affects', r.affected_vehicle_type)}</small></span><span class="chip" style="--c:var(--st-${kindChip})">${lab('restriction_status', r.status)}</span><span></span><span>${r.status === 'pending' ? `<button class="btn" data-a="vr" data-id="${r.id}">Verifikasi</button> <button class="btn" data-a="rj" data-id="${r.id}">Tolak</button>` : ''}</span>`);
   }).join('') },
+  { k: 'pts', l: 'Titik', n: () => S.water_sources.length, c: 'var(--wat)', r: () => {
+    const opts = (kind, cur) => {
+      const e = c(kind) || {};
+      const items = Array.isArray(e) ? e.map((v) => [v, { label: v }]) : Object.entries(e);
+      return items.map(([v, o]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(o.label ?? v)}</option>`).join('');
+    };
+    const in2 = (p, ph, v) => `<input data-p="${p}" placeholder="${ph}" value="${esc(v ?? '')}">`;
+    const geo = (p) => `${in2(p + '.lat', 'lat')}${in2(p + '.lon', 'lon')}<button class="btn" data-a="pmap" data-v="${p}" title="Ambil posisi tengah peta">Peta</button>`;
+    return `<div class="box"><h4>Titik air baru</h4>
+    <div class="row"><select data-p="ws.type">${opts('water_source_types', pts.ws.type)}</select>${in2('ws.name', 'nama titik')}</div>
+    <div class="row">${geo('ws')}${in2('ws.capacity', 'kapasitas (opsional)')}</div>
+    <div class="row"><select data-p="ws.status">${opts('water_source_status', pts.ws.status)}</select><button class="btn go" data-a="wsadd">Tambah titik</button></div>
+    <small class="mono">${S.water_sources.map((w) => `${esc(w.id)} · ${esc(w.name)} · ${lab('water_source_types', w.type)} · ${(w.location?.lat ?? w.lat).toFixed(4)}, ${(w.location?.lon ?? w.lon).toFixed(4)} · ${lab('water_source_status', w.status)} <button class="ib" data-a="wdel" data-id="${w.id}" title="Hapus">✕</button>`).join('<br>')}</small></div>
+    <div class="box"><h4>Pembatasan jalan (titik)</h4>
+    <div class="row"><select data-p="r.reason">${opts('restriction_reason', pts.r.reason)}</select></div>
+    <div class="row">${geo('r')}<button class="btn" data-a="radd">Lapor</button></div>
+    <small>Laporan baru masuk sebagai pending; verifikasi di tab Pembatasan.</small></div>
+    ${gameMode ? '<small>Pembuat laporan otomatis (game mode) ada di tombol "Buat laporan" di atas peta.</small>'
+      : `<div class="box"><h4>Laporan insiden</h4>
+    <div class="row"><select data-p="inc.type">${opts('incident_types', pts.inc.type || (c('incident_types')?.[0] ?? ''))}</select>${in2('inc.address', 'alamat')}</div>
+    <div class="row">${geo('inc')}<button class="btn go" data-a="iadd">Buat insiden</button></div></div>`}`;
+  } },
   { k: 'stat', l: 'Statistik', r: () => {
     const mx = Math.max(1, ...S.vehicles.map((v) => v.km_today));
     const cnt = tally(S.members, (m) => m.status);
@@ -369,7 +399,8 @@ function render() {
   $('#r2').innerHTML = railHTML(S.teams[1]);
   const dc = $('#dc'); dc.innerHTML = dcard(); dc.classList.toggle('min', ui.dmin);
   $('#bt').innerHTML = DOCK.map((t) => `<button data-a="tab" data-v="${t.k}" class="${sel.tab === t.k ? 'on' : ''}">${t.l}${t.n && t.n() ? `<em style="--c:${t.c || 'var(--acc)'}">${t.n()}</em>` : ''}</button>`).join('') + '<span class="sp"></span><button class="ib" data-a="panel" data-v="hb" title="Lipat dock (3)" style="height:28px;padding:0">⌄</button>';
-  $('#bc').innerHTML = DOCK.find((t) => t.k === sel.tab).r();
+  const typing = document.activeElement?.closest?.('#bc [data-p]');
+  if (!typing) $('#bc').innerHTML = DOCK.find((t) => t.k === sel.tab).r();
 }
 
 // ---- actions ----
@@ -390,11 +421,49 @@ const ACT = {
   speed: (_, v) => { setSpeed(+v); return 0; },
   vr: (id) => { verify(id, 'verified'); return 0; },
   rj: (id) => { verify(id, 'rejected'); return 0; },
+  pmap: (_, path) => { const ctr = map.getCenter(); setPath(pts, `${path}.lat`, ctr.lat.toFixed(6)); setPath(pts, `${path}.lon`, ctr.lng.toFixed(6)); },
+  wsadd: async () => {
+    if (!pts.ws.name || !isFinite(+pts.ws.lat) || !isFinite(+pts.ws.lon)) { toast('Nama, lat, lon wajib'); return 0; }
+    try {
+      await rest('POST', '/water-sources', { name: pts.ws.name, type: pts.ws.type, lat: +pts.ws.lat, lon: +pts.ws.lon,
+        status: pts.ws.status, capacity_note: pts.ws.capacity || null, notes: 'ditambahkan operator' });
+      toast('Titik air ditambahkan');
+      pts.ws = { ...pts.ws, name: '', lat: '', lon: '', capacity: '' };
+    } catch (err) { toast(errText(err)); }
+    return 0;
+  },
+  wdel: async (id) => {
+    try { await rest('DELETE', `/water-sources/${id}`); toast('Titik dihapus'); } catch (err) { toast(errText(err)); }
+    return 0;
+  },
+  radd: async () => {
+    if (!isFinite(+pts.r.lat) || !isFinite(+pts.r.lon)) { toast('Lat/lon tidak valid'); return 0; }
+    try {
+      await rest('POST', '/road-restrictions', { kind: 'point', reason: pts.r.reason,
+        geometry: { kind: 'point', coordinates: [[+pts.r.lat, +pts.r.lon]] } });
+      toast('Pembatasan dilaporkan — tunggu verifikasi');
+      pts.r = { ...pts.r, lat: '', lon: '' };
+    } catch (err) { toast(errText(err)); }
+    return 0;
+  },
+  iadd: async () => {
+    if (!isFinite(+pts.inc.lat) || !isFinite(+pts.inc.lon)) { toast('Lat/lon tidak valid'); return 0; }
+    try {
+      await rest('POST', '/incidents', { type: pts.inc.type || (c('incident_types')?.[0] ?? ''),
+        address: pts.inc.address || null, lat: +pts.inc.lat, lon: +pts.inc.lon });
+      toast('Insiden dibuat');
+      pts.inc = { ...pts.inc, lat: '', lon: '', address: '' };
+    } catch (err) { toast(errText(err)); }
+    return 0;
+  },
 };
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-a]'); if (!el) return;
   const f = ACT[el.dataset.a]; if (!f) return;
   if (f(el.dataset.id, el.dataset.v, el.dataset.a) !== 0) render();
+});
+document.addEventListener('input', (e) => {
+  const el = e.target.closest('[data-p]'); if (el) setPath(pts, el.dataset.p, el.value);
 });
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey) return;

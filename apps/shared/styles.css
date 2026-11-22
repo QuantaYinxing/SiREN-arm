@@ -1,5 +1,6 @@
 /* SiREN prototype styles — visual language from prototype/ui-prototype.html (offline: system fonts). */
 :root{
+  color-scheme:dark;
  --bg:#07090d;--s1:#0c1016;--s2:#121821;--s3:#19212d;--ln:#ffffff14;--ln2:#ffffff2e;
  --ink:#e8edf4;--mu:#8793a5;--acc:#ff6b2c;--wat:#38bdf8;--r:10px;
  --lw:276px;--rw:276px;--dh:244px;

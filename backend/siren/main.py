@@ -83,11 +83,13 @@ def build_app(
     hub.attach(app)
 
     apps_root = REPO_ROOT / "apps"
-    for name, html in (("ops", True), ("field", True), ("shared", False), ("vendor", False),
+    for name, html in (("ops", True), ("field", True), ("db", True), ("shared", False), ("vendor", False),
                        ("data", False)):
         d = apps_root / name
         if d.is_dir():
             app.mount(f"/{name}", StaticFiles(directory=d, html=html), name=name)
+    # Real PMTiles basemap archive (scripts/tiles_build.sh) is served by the
+    # byte-range route in api.py (/tiles/{name}); PMTiles needs 206 responses.
 
     return app, store, hub
 

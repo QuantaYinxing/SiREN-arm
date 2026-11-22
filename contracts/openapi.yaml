@@ -67,6 +67,42 @@ paths:
               schema: {type: object, properties: {token: {type: string}, refresh_token: {type: string}}}
         "401": {"$ref": "#/components/responses/Error"}
 
+  /accounts:
+    get:
+      tags: [auth]
+      summary: Login accounts, password hash never returned (operator only)
+      responses:
+        "200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/Account"}}}}}
+        "403": {"$ref": "#/components/responses/Error"}
+    post:
+      tags: [auth]
+      summary: Create login account (operator only)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, required: [username, password], properties: {username: {type: string}, password: {type: string}, role: {type: string, description: "auth.roles value, default officer"}, member_id: {type: ["string", "null"], description: "link to a Member"}}}}}
+      responses:
+        "201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Account"}}}}
+        "400": {description: "missing username/password, unknown role, or duplicate username"}
+        "403": {"$ref": "#/components/responses/Error"}
+
+  /accounts/{id}:
+    patch:
+      tags: [auth]
+      summary: Change password, role, or linked member
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object, properties: {password: {type: string}, role: {type: string}, member_id: {type: ["string", "null"]}}}}}}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Account"}}}}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+    delete:
+      tags: [auth]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {content: {application/json: {schema: {type: object, properties: {username: {type: string}, removed: {type: boolean}}}}}}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+
   /config/{key}:
     get:
       tags: [master]
@@ -117,6 +153,15 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of Member fields"}}}}
       responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Member"}}}}}
+    delete:
+      tags: [master]
+      summary: Remove from roster (operator only); refused while the member is on an active assignment
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {content: {application/json: {schema: {type: object, properties: {id: {type: string}, name: {type: string}, removed: {type: boolean}}}}}}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
 
   /vehicle-profiles:
     get: {tags: [master], responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/VehicleProfile"}}}}}}}
@@ -427,6 +472,16 @@ components:
         name: {type: string}
         color: {type: string}
         display_order: {type: integer, default: 0}
+
+    Account:
+      type: object
+      required: [id, username, role]
+      properties:
+        id: {type: string}
+        username: {type: string}
+        role: {type: string, description: "auth.roles values"}
+        member_id: {type: ["string", "null"]}
+        created_at: {type: ["string", "null"], description: "password hash never returned"}
 
     Member:
       type: object
