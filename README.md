@@ -1,49 +1,107 @@
 # SiREN — Fire-Brigade Response & Dispatch
 
-Operator console (`/ops`) and crew phone app (`/field`), one backend. Concept and
-architecture: `docs/siren.md` (local, not tracked). Binding rules for every session:
-`docs/rules.md`. Session work log: `docs/blackbox.md` (append-only, mandatory).
+**Si**liwangi + **REN**. A web app for fire-brigade operators: receive a fire report,
+decide who gets sent where — crews, truck, water source, route, ETA — then track them
+in real time. Radio and phone stay the emergency channel; SiREN never becomes the only
+dispatch path.
 
-## What is in this repo
+![Operator console](assets/screenshots/ops.png)
+
+The console: unit cards with live status, the map at the center (self-hosted blueprint
+tiles over OSM), and a dock of working tabs — incidents, water recommendation, road
+restrictions, point manager, statistics, event log.
+
+## Two screens, one backend
+
+| Screen | Who | What it does |
+| --- | --- | --- |
+| `/ops` | operator (laptop) | create incidents, pick crew + water, dispatch, verify restrictions, watch GPS pings |
+| `/field` | petugas (phone) | sees the assignment, pings GPS every 5 s, changes duty status, reports water level and impassable roads |
+
+![Petugas phone app](assets/screenshots/field.png)
+
+The phone app: duty status, the assigned route's water state, a live mini-map, and one-tap
+status transitions — all driven by the same WebSocket hub the operator uses.
+
+## Run it
+
+No Docker needed; everything installs inside `.sandbox/` (repo rule — nothing global).
+
+```bash
+uv venv .sandbox/py
+uv pip install --python .sandbox/py/bin/python -e backend          # runtime deps
+uv pip install --python .sandbox/py/bin/python -e "backend[dev]"   # + pytest
+```
+
+One launcher, three modes:
+
+```bash
+./setup.sh gamemode    # simulator on localhost — dev testing, opens /ops
+./setup.sh realmode    # real data + Cloudflare tunnel — phones join from anywhere
+./setup.sh database    # account & crew GUI, opens /db
+```
+
+`realmode` downloads `cloudflared` once into `.sandbox/bin/` and prints a public HTTPS URL:
+open it yourself as operator, hand the `/field/` URL to your crew — HTTPS at the tunnel
+edge makes phone geolocation work without any certificates. Valhalla (real routing) is
+started if available; without it the backend falls back to straight-line estimates.
+`Ctrl+C` stops server, tunnel and Valhalla; the launcher refuses a busy port.
+
+## One repo, one database per device
+
+Each deployment keeps its own SQLite at `.sandbox/data/siren.sqlite` (never committed).
+The seed loads only into a fresh database, so device A can run 3 people and device B
+can run 5 — logins always match the database they live in. The GUI manages it:
+
+![Database manager](assets/screenshots/database.png)
+
+Create and remove login accounts (role, password, optional link to a crew member) and
+add or remove crew members. Deleting a member who is currently dispatched is refused;
+passwords are stored hashed and never returned by the API. Everything is operator-only.
+
+## Architecture
+
+- **Backend** — one FastAPI process: enum/config loader, dispatch state machine,
+  Valhalla truck-profile routing with estimate fallback, water ranking + pump estimate,
+  restriction queue (operators verify, per limitation L2), SQLite dev store, WebSocket hub.
+- **Contracts first** — `contracts/openapi.yaml`, `contracts/events.json` + `events.md`,
+  `contracts/db.sql`, `contracts/config.yaml` are the source of truth; UI fetches enum
+  labels from `/config/{key}`, nothing is hard-coded.
+- **Wire format** — snake_case JSON, positions `{lat, lon}`, WS envelope
+  `{id, type, ts, v, payload}`; illegal transitions return 409 with the allowed list.
+- **Enum values are Indonesian operational names** (`Baru`, `Dispatched`, `EnRoute`,
+  `OnScene`, `Returning`, `IsiUlang`, `Istirahat`, `Selesai`) — UI copy stays Bahasa.
+- **Map** — self-hosted PMTiles blueprint basemap served with byte-range responses,
+  MapLibre vendored locally; incidents, water points and restriction polygons overlay it.
+
+## Layout
 
 | Path | Contents |
 | --- | --- |
-| `contracts/` | Source of truth: `openapi.yaml`, `events.json` + `events.md`, `db.sql`, `config.yaml` |
-| `backend/` | FastAPI backend: config/enum loader, dispatch state machine, Valhalla routing + estimate fallback, water readings and pump estimate, road restrictions, SQLite dev store, WebSocket hub |
-| `seed/` | Initial data (station, teams, accounts, vehicle profiles, vehicles, members, water sources, restrictions, incidents) — synthetic Garut-area data, real fire-brigade data still pending |
-| `infra/` | docker-compose (Postgres/PostGIS, Valhalla, tile server, Caddy), Valhalla config, Caddyfile, build scripts |
-| `apps/ops`, `apps/field` | Frontend PWAs (later phase; not built yet) |
-| `.sandbox/` | Sandboxed installs and generated data — never global, never committed |
+| `contracts/` | API, events, schema, config enums |
+| `backend/siren/` | the backend modules |
+| `backend/tests/` | 101 tests — API contract, state machine, water ranking, routing, store |
+| `seed/` | starter data (HQ station, teams, accounts, vehicles, water sources from OSM) |
+| `apps/` | `ops/`, `field/`, `db/`, shared client + styles, vendored MapLibre, basemap data |
+| `scripts/` | OSM crop, tile build, Valhalla graph build, water seed |
+| `infra/` | docker-compose for the future VPS deployment (PostGIS, Valhalla, tile server) |
+| `.sandbox/` | installs and generated data — never committed |
 
-## Wire conventions
-
-- JSON keys are snake_case; positions are `{lat, lon}` (+ optional `accuracy_m`).
-- Enum values are Indonesian operational names (`Baru`, `Dispatched`, `EnRoute`, `OnScene`,
-  `Returning`, `IsiUlang`, `Istirahat`, `Offline`, `Selesai`, `Dibatalkan`; water levels
-  0-4). Labels and glosses come from `contracts/config.yaml` — nothing is hard-coded in
-  components.
-- WebSocket envelope: `{id, type, ts, v, payload}`; reconnect sends `snapshot.request`.
-- Status transitions come from `config.yaml`; illegal transitions return HTTP 409 (or a WS
-  `error` envelope) with the allowed list.
-
-## Dev run (no Docker on this machine)
+## Tests
 
 ```bash
-nice -n 10 .sandbox/py/bin/python -m uvicorn siren.main:app --port 8000 \
-  --app-dir backend
-# SQLite at .sandbox/data/siren.sqlite, seed/ loaded, routing.provider=estimate
-SIREN_ROUTING_PROVIDER=estimate .sandbox/py/bin/python backend/siren/main.py
+. .sandbox/py/bin/activate && pytest backend/tests -q   # or:
+.sandbox/py/bin/python -m pytest backend/tests
 ```
 
-Tests (sandboxed, deterministic, injected clock):
+Deterministic: injected clock, estimate provider, SQLite in a temp dir.
 
-```bash
-nice -n 10 .sandbox/py/bin/python -m pytest
-```
+## Known limits
 
-## Production (later)
+- **L1** notifications are never the only dispatch path — radio/phone stays the fallback.
+- **L2** OSM rarely carries road-width tags, so restriction verification is operator-side, not automatic.
+- **L3** Valhalla graph builds are memory-hungry; run them with free RAM and `nice`.
+- **L4** dev password `siren-dev` is fine locally; rotate accounts before a public tunnel session.
 
-`infra/docker-compose.yml` + `infra/Caddyfile` (automatic HTTPS), PostgreSQL/PostGIS,
-self-hosted Valhalla with the Java/Indonesia OSM extract, self-hosted vector tiles. See
-`infra/README.md` for the disk and CPU/RAM budget — the laptop runs local inference, so
-heavy builds are capped with `nice -n 10` and explicit thread limits.
+Spec, decisions and open questions live in `docs/siren.md`; session history in
+`docs/blackbox.md`; binding rules in `docs/rules.md` (`docs/` stays local by design).
