@@ -76,6 +76,46 @@ class Simulator:
     def _leg(self, a: tuple[float, float], b: tuple[float, float]) -> dict:
         return routing_mod.estimate_leg(self.store.config, a, b)
 
+    def _trip(self, asg: dict, start: tuple[float, float], dest: tuple[float, float],
+              via_id: str | None = None) -> list[dict]:
+        """Legs for one trip, each with geometry: Valhalla polyline when the provider
+        answers (restrictions included), straight-line estimate otherwise."""
+        if asg["vehicle_id"]:
+            try:
+                route = routing_mod.build_route(self.store.config, self.store, asg["vehicle_id"],
+                                                {"lat": dest[0], "lon": dest[1]},
+                                                via_water_source_id=via_id)
+                return [{"a": (l["from"]["lat"], l["from"]["lon"]),
+                         "b": (l["to"]["lat"], l["to"]["lon"]),
+                         "minutes": float(l["minutes"]), "geometry": l["geometry"]}
+                        for l in route["legs"]]
+            except (routing_mod.RoutingError, routing_mod.NotFound):
+                pass
+        points = [start]
+        if via_id:
+            points.append(routing_mod.access_point(self.store.water_source(via_id), start))
+        points.append(dest)
+        legs: list[dict] = []
+        for a, b in zip(points, points[1:]):
+            leg = self._leg(a, b)
+            legs.append({"a": a, "b": b, "minutes": float(leg["minutes"]), "geometry": leg["geometry"]})
+        return legs
+
+    def _leg_pos(self, leg: dict, f: float) -> tuple[float, float]:
+        """Point at fraction f along the leg polyline (straight segment when geometry is just endpoints)."""
+        poly = leg["geometry"]
+        if len(poly) < 2:
+            return _interp(leg["a"], leg["b"], f)
+        cum = [0.0]
+        for p, q in zip(poly, poly[1:]):
+            cum.append(cum[-1] + geo.haversine_km(p, q))
+        target = cum[-1] * min(1.0, max(0.0, f))
+        for i, (p, q) in enumerate(zip(poly, poly[1:])):
+            if target <= cum[i + 1]:
+                seg = cum[i + 1] - cum[i]
+                return _interp((p[0], p[1]), (q[0], q[1]), (target - cum[i]) / seg if seg else 0.0)
+        return (poly[-1][0], poly[-1][1])
+
     def _advance(self, member_ids: list[str], target: str) -> None:
         """Move members through the state machine; hub mirrors REST-style broadcasts."""
         for mid in member_ids:
@@ -103,21 +143,13 @@ class Simulator:
                    texts.incident_updated(self.store.config, row), incident_id)
 
     def _plan(self, asg: dict) -> dict | None:
-        """Route legs for one assignment: vehicle -> (water source) -> incident, then back home."""
+        """Route legs for one assignment: vehicle -> (water source) -> incident, then back home.
+        Legs carry geometry so crews follow the route polyline, not straight lines."""
         veh = self.store.vehicle(asg["vehicle_id"]) if asg["vehicle_id"] else None
         inc = self.store.incident(asg["incident_id"])
         home = self._home()
         start = (veh["position"]["lat"], veh["position"]["lon"]) if veh and veh.get("position") else home
-        legs: list[tuple[tuple[float, float], tuple[float, float], float]] = []
-        if asg["water_source_id"]:
-            src = self.store.water_source(asg["water_source_id"])
-            ap = routing_mod.access_point(src, start)
-            l1 = self._leg(start, ap)
-            l2 = self._leg(ap, (inc["lat"], inc["lon"]))
-            legs.append((start, ap, l1["minutes"]))
-            legs.append((ap, (inc["lat"], inc["lon"]), l2["minutes"]))
-        else:
-            legs.append((start, (inc["lat"], inc["lon"]), self._leg(start, (inc["lat"], inc["lon"]))["minutes"]))
+        legs = self._trip(asg, start, (inc["lat"], inc["lon"]), asg["water_source_id"])
         now = self.store.now_seconds()
         created = asg.get("created_at")
         depart_at = (timeutil.parse_iso(created).timestamp() if created else now) \
@@ -126,7 +158,7 @@ class Simulator:
             "stage": "dispatched",
             "depart_at": depart_at,
             "legs": legs,
-            "total_min": sum(l[2] for l in legs),
+            "total_min": sum(l["minutes"] for l in legs),
             "pos": start,
             "departed": None,
             "scene_at": None,
@@ -228,7 +260,7 @@ class Simulator:
                     self._advance([a["member_id"]], "EnRoute")
                     crew["stage"] = "enroute"
                     crew["departed"] = now
-                    crew["pos"] = crew["legs"][0][0]
+                    crew["pos"] = crew["legs"][0]["a"]
                     self._ping_crew(a, crew, crew["pos"], now)
             elif stage == "enroute":
                 self._move(a, crew, now)
@@ -244,13 +276,13 @@ class Simulator:
     def _move(self, asg: dict, crew: dict, now: float) -> None:
         frac = min(1.0, (now - crew["departed"]) / (crew["total_min"] * 60))
         rem = frac * crew["total_min"]
-        pos = crew["legs"][-1][1]
-        for leg_a, leg_b, minutes in crew["legs"]:
-            if rem >= minutes:
-                rem -= minutes
-                pos = leg_b
+        pos = crew["legs"][-1]["b"]
+        for leg in crew["legs"]:
+            if rem >= leg["minutes"]:
+                rem -= leg["minutes"]
+                pos = leg["b"]
             else:
-                pos = _interp(leg_a, leg_b, rem / minutes if minutes else 0.0)
+                pos = self._leg_pos(leg, rem / leg["minutes"] if leg["minutes"] else 0.0)
                 break
         crew["pos"] = pos
         if asg["vehicle_id"]:
@@ -308,9 +340,8 @@ class Simulator:
                 self._advance(self._crew_members(asg), "IsiUlang")
                 src = self.store.water_source(asg["water_source_id"])
                 ap = routing_mod.access_point(src, crew["pos"])
-                leg = self._leg(crew["pos"], ap)
-                crew["legs"] = [(crew["pos"], ap, leg["minutes"])]
-                crew["total_min"] = leg["minutes"]
+                crew["legs"] = self._trip(asg, crew["pos"], ap, None)
+                crew["total_min"] = sum(l["minutes"] for l in crew["legs"])
                 crew["departed"] = now
                 crew["refill_at"] = now + float(cfg.get("water.refill_minutes", 3)) * 60
                 crew["stage"] = "refill"
@@ -332,9 +363,8 @@ class Simulator:
         self._advance(self._crew_members(asg), "Returning")
         self._set_incident(asg["incident_id"], "Returning")
         home = self._home()
-        leg = self._leg(crew["pos"], home)
-        crew["legs"] = [(crew["pos"], home, leg["minutes"])]
-        crew["total_min"] = leg["minutes"]
+        crew["legs"] = self._trip(asg, crew["pos"], home, None)
+        crew["total_min"] = sum(l["minutes"] for l in crew["legs"])
         crew["departed"] = now
         crew["stage"] = "returning"
 

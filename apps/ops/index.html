@@ -256,20 +256,63 @@ async function initMap() {
   map.on('mouseenter', 'incident-dot', () => { map.getCanvas().style.cursor = 'pointer'; });
   map.on('mouseleave', 'incident-dot', () => { map.getCanvas().style.cursor = ''; });
 }
+// Crew routes: real polylines for vehicles on duty, cached per (vehicle, status, incident, water).
+const crewRoutes = new Map(), crewPending = new Set();
+const CREW_STATUSES = ['Dispatched', 'EnRoute', 'Returning'];
+const crewKey = (a) => {
+  const v = veh(a.vehicle_id);
+  return `${a.vehicle_id}|${v?.status ?? ''}|${a.status}|${a.incident_id}|${a.water_source_id ?? ''}`;
+};
+function crewRouteSpec(a) {
+  const v = veh(a.vehicle_id);
+  if (a.status === 'Returning') {
+    const s = S.stations[0];
+    return s ? { to: { lat: s.lat, lon: s.lon }, via: null } : null;
+  }
+  const i = inc(a.incident_id);
+  if (!i) return null;
+  if (v?.status === 'IsiUlang' && a.water_source_id && water(a.water_source_id)) {
+    return { to: water(a.water_source_id).location, via: null };
+  }
+  return { to: i.location ?? { lat: i.lat, lon: i.lon }, via: a.water_source_id ?? null };
+}
+async function fetchCrewRoutes() {
+  const active = S.assignments.filter((a) => a.vehicle_id && CREW_STATUSES.includes(a.status));
+  const keys = new Set(active.map(crewKey));
+  for (const k of [...crewRoutes.keys(), ...crewPending]) if (!keys.has(k)) { crewRoutes.delete(k); crewPending.delete(k); }
+  for (const a of active) {
+    const k = crewKey(a);
+    if (crewRoutes.has(k) || crewPending.has(k)) continue;
+    const spec = crewRouteSpec(a);
+    if (!spec) continue;
+    crewPending.add(k);
+    rest('POST', '/routing/route', { vehicle_id: a.vehicle_id, to: spec.to, via_water_source_id: spec.via })
+      .then((r) => { crewPending.delete(k); crewRoutes.set(k, r); paintMap(); })
+      .catch(() => { crewPending.delete(k); });
+  }
+}
 function paintMap() {
   if (!map || !S) return;
+  fetchCrewRoutes();
   const route = { legs: [] };
   if (preview) {
     const vc = teamColor(preview.vehicle_id && veh(preview.vehicle_id)?.team_id);
     preview.legs.forEach((leg, i) => route.legs.push({ geometry: leg.geometry, color: i === 0 && preview.legs.length > 1 ? '#38bdf8' : vc }));
   }
   for (const a of S.assignments) {
-    if (!a.vehicle_id || !['Dispatched', 'EnRoute', 'OnScene', 'Returning'].includes(a.status)) continue;
-    const v = veh(a.vehicle_id), i = inc(a.incident_id);
-    if (!v?.position || !i || ACTIVE.includes(i.status) === false) continue;
-    const via = a.water_source_id && water(a.water_source_id)?.location;
-    const pts = [v.position]; if (via) pts.push(via); pts.push(i.location);
-    route.legs.push({ geometry: pts.map((p) => [p.lat, p.lon]), color: teamColor(v.team_id) });
+    if (!a.vehicle_id || !CREW_STATUSES.includes(a.status)) continue;
+    const v = veh(a.vehicle_id);
+    if (!v?.position) continue;
+    const color = teamColor(v.team_id);
+    const cr = crewRoutes.get(crewKey(a));
+    if (cr?.legs?.length) {
+      for (const leg of cr.legs) route.legs.push({ geometry: leg.geometry, color, preview: false });
+      continue;
+    }
+    const spec = crewRouteSpec(a);
+    const via = spec?.via && water(spec.via)?.location;
+    const pts = [v.position]; if (via) pts.push(via); if (spec?.to) pts.push(spec.to);
+    if (pts.length > 1) route.legs.push({ geometry: pts.map((p) => [p.lat, p.lon]), color, preview: false });
   }
   applyMap(map, mapData(S, { inc: sel.inc, water: chosenWater(), route, vehicleColor: (v) => teamColor(v.team_id), memberColor: (m) => STC[m.status] }));
 }

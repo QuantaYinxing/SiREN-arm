@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from siren import game
+from siren import geo
 from siren.game import GameClock, Simulator
 from siren.main import REPO_ROOT, build_app
 from siren.ws import Hub
@@ -179,6 +180,44 @@ def test_standby_pings_keep_freshness_live(tmp_path):
         sim.tick(store.now_seconds())
     live = [m for m in store.members() if m["status"] == "Standby" and m["freshness"] == "live"]
     assert len(live) >= 1
+
+
+def test_crew_moves_along_route_geometry(tmp_path, monkeypatch):
+    """Crew position follows the route polyline, not a straight start→incident line."""
+    client, store, hub, clock, app = make_env(tmp_path)
+    ops = login(client)
+
+    geom = [[-7.2900, 108.2100], [-7.2850, 108.2250], [-7.2880, 108.2460]]
+
+    def fake_build_route(config, st, vehicle_id, to, via_water_source_id=None, **kw):
+        return {"provider": "valhalla", "vehicle_id": vehicle_id,
+                "legs": [{"from": {"lat": geom[0][0], "lon": geom[0][1]},
+                          "to": {"lat": geom[-1][0], "lon": geom[-1][1]},
+                          "km": 4.0, "minutes": 10.0, "geometry": geom, "source": "valhalla"}],
+                "total_minutes": 10.0, "total_km": 4.0, "warnings": []}
+
+    monkeypatch.setattr(game.routing_mod, "build_route", fake_build_route)
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.288, "lon": 108.246},
+                      headers=ops).json()["id"]
+    resp = client.post(f"/incidents/{iid}/assignments",
+                       json={"members": ["A"], "vehicle_id": "v1"}, headers=ops)
+    assert resp.json()["route"]["provider"] == "valhalla"
+
+    clock.advance(store.config.get("game.departure_delay_minutes", 1) + 0.1)
+    app.state.sim.tick(store.now_seconds())
+    assert store.member("A")["status"] == "EnRoute"
+    assert store.vehicle("v1")["position"] == {"lat": geom[0][0], "lon": geom[0][1]}
+
+    clock.advance(5.0)  # half of the 10-minute leg
+    app.state.sim.tick(store.now_seconds())
+    pos = store.vehicle("v1")["position"]
+    p = (pos["lat"], pos["lon"])
+    dev = min(abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) /
+              ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5 * 111.0
+              for a, b in zip(geom, geom[1:]))
+    assert dev < 0.05  # on the polyline (km deviation, degrees→km)
+    straight = ((geom[0][0] + geom[-1][0]) / 2, (geom[0][1] + geom[-1][1]) / 2)
+    assert geo.haversine_km(p, straight) > 0.2  # not the old straight-line midpoint
 
 
 def test_officer_reports_restriction_while_enroute(tmp_path):

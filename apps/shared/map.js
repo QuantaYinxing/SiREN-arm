@@ -200,7 +200,7 @@ export function mapData(state, ui = {}) {
   const routeFeatures = [];
   if (ui.route) {
     for (const leg of ui.route.legs) {
-      routeFeatures.push(ln(leg.geometry, { preview: true, color: leg.color || C.water }));
+      routeFeatures.push(ln(leg.geometry, { preview: leg.preview !== false, color: leg.color || C.water }));
     }
   }
   const route = FC(routeFeatures);
