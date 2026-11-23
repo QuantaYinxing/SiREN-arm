@@ -7,9 +7,13 @@
 # No set -e: the service exits nonzero on crash and the loop must keep going.
 cd "$(dirname "$0")/.."
 export LD_LIBRARY_PATH="$PWD/.sandbox/lib"
+# Prefer the protobuf-3.21.12 build (stable under repeat requests); fall back to the
+# protobuf-36 binary, which crashes intermittently — that is what this loop exists for.
+VH=".sandbox/bin/valhalla_service.pb321"
+[ -x "$VH" ] || VH=".sandbox/bin/valhalla_service"
 LOG="${LOG:-/tmp/valhalla_keep.log}"
 while :; do
-  nice -n 10 .sandbox/bin/valhalla_service .sandbox/data/valhalla/valhalla.json 1 >>"$LOG" 2>&1
+  nice -n 10 "$VH" .sandbox/data/valhalla/valhalla.json 1 >>"$LOG" 2>&1
   echo "$(date -Is) valhalla_service exited ($?), restarting in 2s" >>"$LOG"
   sleep 2
 done

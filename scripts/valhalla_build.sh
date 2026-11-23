@@ -5,6 +5,14 @@
 # lives in .sandbox/lib, so LD_LIBRARY_PATH must be exported before running them.
 # Everything stays inside .sandbox/ (docs/rules.md §sandboxing); generated data is
 # never committed.
+#
+# Service binary note: the .sandbox/bin/valhalla_service build links system protobuf
+# 36 and SIGSEGVs on repeat /route requests (Valhalla 3.9.3 is not compatible with
+# protobuf 36). The stable binary is .sandbox/bin/valhalla_service.pb321, rebuilt from
+# the same source with protobuf 3.21.12 (upstream's Ubuntu 24.04 pin) installed into
+# .sandbox/deps-pb and passed via -DCMAKE_PREFIX_PATH plus -DCMAKE_CXX_FLAGS
+# "-I$PWD/.sandbox/deps-pb/include"; setup.sh prefers it. Details: docs/blackbox.md
+# 2026-11-23.
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root, wherever the script is invoked from
 

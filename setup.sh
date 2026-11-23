@@ -40,7 +40,12 @@ if [ "$MODE" != "database" ]; then
   if ss -tlnp 2>/dev/null | grep -qE ":8081\s"; then
     echo "→ valhalla :8081 sudah jalan — pakai yang ada"
   else
-    LD_LIBRARY_PATH="$PWD/.sandbox/lib" nice -n 5 .sandbox/bin/valhalla_service \
+    # .sandbox/bin/valhalla_service.pb321 is built against protobuf 3.21.12 (the version
+    # Valhalla 3.9.3 pins upstream); the plain binary crashes on repeat requests under
+    # protobuf 36 (docs/blackbox.md 2026-11-23). Fallback keeps the old binary working.
+    VH=".sandbox/bin/valhalla_service.pb321"
+    [ -x "$VH" ] || VH=".sandbox/bin/valhalla_service"
+    LD_LIBRARY_PATH="$PWD/.sandbox/lib" nice -n 5 "$VH" \
       .sandbox/data/valhalla/valhalla.json 1 >/tmp/siren-valhalla.log 2>&1 &
     VH_PID=$!
   fi
