@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import time
 
 from .config import Config
 from .geo import blocks, haversine_km, position
@@ -23,6 +24,11 @@ from .store import NotFound
 
 # vehicle type -> Valhalla costing name
 COSTING_BY_TYPE = {"truck": "truck", "motorbike": "motorcycle", "patrol_car": "auto"}
+
+# Water recommendation matrix is expensive (2 Valhalla calls per active source, worker
+# serialised). Cache per (vehicle, incident, tank-low) for routing.options_cache_seconds
+# (default 30s, 0 disables) — recommendations are advisory; the dispatch route recomputes.
+_options_cache: dict[tuple[int, str, str, bool, float], tuple[float, dict, Any]] = {}
 
 
 class RoutingError(Exception):
@@ -302,8 +308,31 @@ def water_options(config: Config, store: Any, vehicle_id: str, incident_id: str)
     refill_minutes = float(config.get("water.refill_minutes", 3))
     refill_required = state["level"] <= float(config.get("water.low_level_threshold", 1))
 
+    # Cache entry keeps a strong reference to the store so its id() stays unique
+    # (CPython recycles ids of collected objects); entries older than 2*ttl are pruned.
+    key = (id(store), vehicle_id, incident_id, refill_required, state["level"])
+    now = time.monotonic()
+    ttl = float(config.get("routing.options_cache_seconds", 30))
+    if ttl > 0:
+        for k, (ts, _, _) in list(_options_cache.items()):
+            if now - ts > 2 * ttl:
+                del _options_cache[k]
+        cached = _options_cache.get(key)
+        if cached is not None and cached[2] is store and now - cached[0] < ttl:
+            return cached[1]
+
+    # Nearest-N first: the ranking shows routing.max_options anyway, so building the
+    # matrix over the closest sources bounds Valhalla calls when many are active.
+    veh_pos = (veh["lat"], veh["lon"])
+    limit_sources = int(config.get("routing.matrix_max_sources", 6))
+
+    def _dist(ws: dict) -> float:
+        return min(haversine_km(veh_pos, (p["lat"], p["lon"])) for p in ws["access_points"])
+
+    sources = sorted(store.water_sources(status="active"), key=_dist)[:limit_sources]
+
     options: list[dict] = []
-    for ws in store.water_sources(status="active"):
+    for ws in sources:
         route = build_route(config, store, vehicle_id, {"lat": inc["lat"], "lon": inc["lon"]}, ws["id"])
         if len(route["legs"]) < 2:
             continue
@@ -328,7 +357,7 @@ def water_options(config: Config, store: Any, vehicle_id: str, incident_id: str)
     options.sort(key=lambda o: (o["score_minutes"], o["b"]["km"]))
     limit = int(config.get("routing.max_options", 3))
     ranked = [{**o, "rank": i + 1} for i, o in enumerate(options[:limit])]
-    return {
+    result = {
         "vehicle_id": vehicle_id,
         "incident_id": incident_id,
         "water_level": state["level"],
@@ -336,3 +365,5 @@ def water_options(config: Config, store: Any, vehicle_id: str, incident_id: str)
         "refill_minutes": refill_minutes if refill_required else 0.0,
         "options": ranked,
     }
+    _options_cache[key] = (now, result, store)
+    return result

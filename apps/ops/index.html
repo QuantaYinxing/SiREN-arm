@@ -70,7 +70,7 @@ let pts = { ws: { name: '', type: 'hydrant', lat: '', lon: '', capacity: '', sta
   r: { reason: 'flood', lat: '', lon: '' },
   inc: { type: '', address: '', lat: '', lon: '' },
   veh: { name: '', plate: '', type: 'truck', team: '', fuel: 100 } };
-let reco = null, preview = null, previewTimer = null, vehTimer = null;
+let reco = null, preview = null, previewTimer = null, vehTimer = null, recoTimer = null, paintTimer = null, renderTimer = null;
 let clockBase = { server: Date.now(), local: Date.now() };
 
 const $ = (s) => document.querySelector(s);
@@ -134,7 +134,7 @@ function fold(ev) {
       const m = member(p.member_id);
       if (m) { m.position = p.position; m.freshness = p.freshness; m.position_age_seconds = p.position_age_seconds; }
       const v = p.vehicle_id && veh(p.vehicle_id); if (v) v.position = p.position;
-      paintMap(); render(); return;
+      schedulePaint(); scheduleRender(); return;
     }
     case 'vehicle.water_level': { const v = veh(p.vehicle_id); if (v) { v.water_level = p.level; v.water_level_source = p.source; v.water_level_confirmed_at = p.confirmed_at; v.estimated = p.source === 'estimate'; } break; }
     case 'vehicle.fuel': { const v = veh(p.vehicle_id); if (v) v.fuel_pct = p.fuel_pct; break; }
@@ -154,7 +154,7 @@ function fold(ev) {
       break;
   }
   if (ev.type !== 'member.position') logLine(ev);
-  render(); paintMap();
+  scheduleRender(); schedulePaint();
 }
 
 function logLine(ev) {
@@ -226,6 +226,7 @@ async function refreshReco() {
   catch (err) { toast(errText(err)); reco = null; }
   schedulePreview(); render();
 }
+function scheduleReco() { clearTimeout(recoTimer); recoTimer = setTimeout(refreshReco, 300); }
 function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(fetchPreview, 250); }
 async function fetchPreview() {
   const P = prev();
@@ -268,7 +269,7 @@ async function initMap() {
   map = await createMap($('#map'));
   globalThis.__map = map; // dev hook: inspect sources from the console
   globalThis.__openCtx = openCtx; // dev hook: simulate the right-click menu
-  map.on('click', 'incident-dot', (e) => { const id = e.features?.[0]?.properties?.id; if (id) { sel.inc = sel.inc === id ? null : id; sel.m.clear(); sel.w = null; reco = null; preview = null; ui.dmin = false; refreshReco(); } });
+  map.on('click', 'incident-dot', (e) => { const id = e.features?.[0]?.properties?.id; if (id) { sel.inc = sel.inc === id ? null : id; sel.m.clear(); sel.w = null; reco = null; preview = null; ui.dmin = false; scheduleReco(); } });
   map.on('click', 'water-dot', (e) => { const id = e.features?.[0]?.properties?.id; if (sel.inc && id && !id.includes(':ap')) { sel.w = sel.w === id ? null : id; schedulePreview(); render(); } });
   map.on('mouseenter', 'incident-dot', () => { map.getCanvas().style.cursor = 'pointer'; });
   map.on('mouseleave', 'incident-dot', () => { map.getCanvas().style.cursor = ''; });
@@ -364,6 +365,11 @@ async function fetchCrewRoutes() {
       .catch(() => { crewPending.delete(k); const prev = crewRetry.get(k) ?? 0; crewRetry.set(k, Date.now() + Math.min(60000, Math.max(10000, prev ? (Date.now() - prev) * 2 : 10000))); });
   }
 }
+// Pi perf: WS snapshots arrive many times per second at high game speed; coalesce
+// map repaints (~150ms) and dock re-renders (~250ms). Direct UI actions still paint
+// immediately — only event-driven redraws are batched.
+function schedulePaint() { if (paintTimer) return; paintTimer = setTimeout(() => { paintTimer = null; paintMap(); }, 150); }
+function scheduleRender() { if (renderTimer) return; renderTimer = setTimeout(() => { renderTimer = null; render(); }, 250); }
 function paintMap() {
   globalThis.__perf.paints++;
   if (!map || !S) return;
@@ -541,11 +547,11 @@ const ACT = {
   panel: (_, v) => $('#ops').classList.toggle(v),
   zin: () => { map?.zoomIn(); return 0; },
   zout: () => { map?.zoomOut(); return 0; },
-  inc: (id) => { sel.inc = sel.inc === id ? null : id; sel.m.clear(); sel.w = null; reco = null; preview = null; ui.dmin = false; refreshReco(); },
+  inc: (id) => { sel.inc = sel.inc === id ? null : id; sel.m.clear(); sel.w = null; reco = null; preview = null; ui.dmin = false; scheduleReco(); },
   dmin: () => { ui.dmin = !ui.dmin; },
   dclose: () => { sel.inc = null; sel.m.clear(); sel.w = null; reco = null; preview = null; },
-  m: (id) => { if (!sel.inc) { toast('Pilih insiden dulu'); return 0; } sel.m.has(id) ? sel.m.delete(id) : sel.m.add(id); sel.w = null; refreshReco(); },
-  team: (id) => { if (!sel.inc) { toast('Pilih insiden dulu'); return 0; } sel.m = new Set(S.members.filter((m) => m.team_id === id && m.status === 'Standby').map((m) => m.id)); sel.w = null; refreshReco(); },
+  m: (id) => { if (!sel.inc) { toast('Pilih insiden dulu'); return 0; } sel.m.has(id) ? sel.m.delete(id) : sel.m.add(id); sel.w = null; scheduleReco(); },
+  team: (id) => { if (!sel.inc) { toast('Pilih insiden dulu'); return 0; } sel.m = new Set(S.members.filter((m) => m.team_id === id && m.status === 'Standby').map((m) => m.id)); sel.w = null; scheduleReco(); },
   w: (id) => { sel.w = id; schedulePreview(); },
   send: () => { send(); return 0; },
   link: () => { reporterLink(); return 0; },
