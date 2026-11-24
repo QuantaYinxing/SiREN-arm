@@ -349,17 +349,19 @@ function crewRouteSpec(a) {
 async function fetchCrewRoutes() {
   const active = S.assignments.filter((a) => a.vehicle_id && CREW_STATUSES.includes(a.status));
   const keys = new Set(active.map(crewKey));
-  for (const k of [...crewRoutes.keys(), ...crewPending]) if (!keys.has(k)) { crewRoutes.delete(k); crewPending.delete(k); }
+  for (const k of [...crewRoutes.keys(), ...crewPending, ...crewRetry.keys()]) if (!keys.has(k)) { crewRoutes.delete(k); crewPending.delete(k); crewRetry.delete(k); }
   for (const a of active) {
     const k = crewKey(a);
     if (crewRoutes.has(k) || crewPending.has(k)) continue;
+    const failAt = crewRetry.get(k);
+    if (failAt !== undefined && Date.now() < failAt) continue;
     const spec = crewRouteSpec(a);
     if (!spec) continue;
     crewPending.add(k);
     globalThis.__perf.routeFetches++;
     rest('POST', '/routing/route', { vehicle_id: a.vehicle_id, to: spec.to, via_water_source_id: spec.via })
-      .then((r) => { crewPending.delete(k); crewRoutes.set(k, r); paintMap(); })
-      .catch(() => { crewPending.delete(k); });
+      .then((r) => { crewPending.delete(k); crewRoutes.set(k, r); crewRetry.delete(k); paintMap(); })
+      .catch(() => { crewPending.delete(k); const prev = crewRetry.get(k) ?? 0; crewRetry.set(k, Date.now() + Math.min(60000, Math.max(10000, prev ? (Date.now() - prev) * 2 : 10000))); });
   }
 }
 function paintMap() {
