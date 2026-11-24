@@ -141,3 +141,6 @@ Deterministic: injected clock, estimate provider, SQLite in a temp dir.
 
 Spec, decisions and open questions live in `docs/siren.md`; session history in
 `docs/blackbox.md`; binding rules in `docs/rules.md` (`docs/` stays local by design).
+This fork's remote is `QuantaYinxing/SiREN-arm` (remote name `arm`); commits here are
+authored as `QuantaYinxing` via repo-local `git config` — `gh` login only authenticates
+pushes, it does not set commit authorship.
