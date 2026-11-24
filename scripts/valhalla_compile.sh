@@ -98,7 +98,7 @@ if [ "$PB_VER" != "3.21.12" ]; then
   mkdir -p .sandbox/deps-pb
   if [ ! -d .sandbox/src/protobuf-3.21.12 ]; then
     curl -sL --fail -o .sandbox/src/protobuf-cpp-3.21.12.tar.gz \
-      https://github.com/protocolbuffers/protobuf/releases/download/v3.21.12/protobuf-cpp-3.21.12.tar.gz
+      https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.21.12.tar.gz
     tar -xzf .sandbox/src/protobuf-cpp-3.21.12.tar.gz -C .sandbox/src
   fi
   cmake -S .sandbox/src/protobuf-3.21.12 -B .sandbox/src/protobuf-3.21.12/build \
