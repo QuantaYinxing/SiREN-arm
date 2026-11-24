@@ -449,6 +449,12 @@ paths:
         - {name: limit, in: query, schema: {type: integer, default: 50}}
       responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/EventLogEntry"}}}}}}
 
+  /reset-operations:
+    post:
+      tags: [live]
+      summary: Surgical daily reset (operator only) — delete incidents, assignments, reporter links and the event log; members and vehicles return to Standby. Accounts, vehicles, water sources and restrictions stay; archive the database first if history must survive.
+      responses: {"200": {content: {application/json: {schema: {"type": "object", "required": ["cleared"], "properties": {"cleared": {"type": "object", "required": ["incidents", "assignments", "reporter_links", "events"], "properties": {"incidents": {"type": "integer"}, "assignments": {"type": "integer"}, "reporter_links": {"type": "integer"}, "events": {"type": "integer"}}}}}}}}, "403": {"$ref": "#/components/responses/Error"}}}
+
   /game/incident:
     post:
       tags: [dev]

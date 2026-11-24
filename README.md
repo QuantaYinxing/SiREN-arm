@@ -41,6 +41,10 @@ One launcher, three modes:
 ./setup.sh database    # account & crew GUI, opens /db
 ```
 
+`--fresh` on `realmode`/`database` archives the device DB to `.sandbox/data/archive/` and
+resets the operational day (incidents/assignments/log cleared, crew back to Standby —
+accounts and vehicles survive). gamemode always starts from a wiped scratch DB.
+
 `realmode` downloads `cloudflared` once into `.sandbox/bin/` and prints a public HTTPS URL:
 open it yourself as operator, hand the `/field/` URL to your crew — HTTPS at the tunnel
 edge makes phone geolocation work without any certificates. Valhalla (real routing) is
@@ -106,7 +110,7 @@ live (add/remove shows up immediately), each card carrying both gauges: air and 
 | --- | --- |
 | `contracts/` | API, events, schema, config enums |
 | `backend/siren/` | the backend modules |
-| `backend/tests/` | 101 tests — API contract, state machine, water ranking, routing, store |
+| `backend/tests/` | 112 tests — API contract, state machine, water ranking, routing, store, daily reset |
 | `seed/` | starter data (HQ station, teams, accounts, vehicles, water sources from OSM) |
 | `apps/` | `ops/`, `field/`, `db/`, shared client + styles, vendored MapLibre, basemap data |
 | `scripts/` | OSM crop, tile build, Valhalla graph build + keep loop, water seed |

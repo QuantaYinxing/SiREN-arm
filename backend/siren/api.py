@@ -193,6 +193,18 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
     def log(request: Request, incident_id: str | None = None, limit: int = 50) -> list[dict]:
         return store.event_log(limit=limit, incident_id=incident_id)
 
+    @app.post("/reset-operations")
+    def reset_operations(request: Request) -> dict:
+        """Surgical daily reset (docs/siren.md §Operations reset): delete incidents,
+        assignments, reporter links and the event log, put members/vehicles back to
+        Standby; accounts, vehicles, water sources and restrictions stay. Archive the
+        database first if the day's history must survive — setup.sh --fresh archives
+        before resetting. Operator only."""
+        actor = _account(request, role="operator")
+        counts = store.reset_operations()
+        emit(request, "ops.reset", {"cleared": counts}, texts.ops_reset(counts), actor)
+        return {"cleared": counts}
+
     # ---- auth ----
 
     @app.post("/auth/login")

@@ -371,29 +371,37 @@ class Store:
                 "expires_at": r.get("expires_at"), "note": r.get("note"), "photo_url": r.get("photo_url")})
             counts["road_restrictions"] += 1
 
-        for inc in seed("incidents") or []:
-            if present("incident", inc["id"]):
-                continue
-            self._insert("incident", {
-                "id": inc["id"], "type": inc["type"], "address": inc.get("address"),
-                "description": inc.get("description"), "reporter_name": inc.get("reporter_name"),
-                "reporter_account_id": inc.get("reporter_account_id"),
-                "reporter_link_id": inc.get("reporter_link_id"), "status": inc.get("status", "Baru"),
-                "lat": inc["lat"], "lon": inc["lon"], "created_at": inc.get("created_at") or now,
-                "dispatched_at": inc.get("dispatched_at"), "arrived_at": inc.get("arrived_at"),
-                "finished_at": inc.get("finished_at") or (now if inc.get("status") == "Selesai" else None),
-                "cancelled_at": inc.get("cancelled_at") or (now if inc.get("status") == "Dibatalkan" else None)})
-            for a in inc.get("assignments") or []:
-                if self._row("SELECT id FROM assignment WHERE incident_id = ? AND member_id = ?",
-                             (inc["id"], a["member_id"])) is not None:
+        # Demo incidents are seeded ONCE per database. reset_operations clears them
+        # but the config_key marker survives (config_key is master data, not
+        # operational), so a fresh day does not resurrect yesterday's demo cases.
+        if self._row("SELECT value FROM config_key WHERE key = ?", ("seed.incidents_loaded",)) is None:
+            for inc in seed("incidents") or []:
+                if present("incident", inc["id"]):
                     continue
-                self._insert("assignment", {
-                    "id": new_id("asg"), "incident_id": inc["id"], "member_id": a["member_id"],
-                    "vehicle_id": a.get("vehicle_id"), "water_source_id": a.get("water_source_id"),
-                    "role": a.get("role"), "status": a.get("status", "Dispatched"),
-                    "created_at": now, "updated_at": None})
-                counts["assignments"] += 1
-            counts["incidents"] += 1
+                self._insert("incident", {
+                    "id": inc["id"], "type": inc["type"], "address": inc.get("address"),
+                    "description": inc.get("description"), "reporter_name": inc.get("reporter_name"),
+                    "reporter_account_id": inc.get("reporter_account_id"),
+                    "reporter_link_id": inc.get("reporter_link_id"), "status": inc.get("status", "Baru"),
+                    "lat": inc["lat"], "lon": inc["lon"], "created_at": inc.get("created_at") or now,
+                    "dispatched_at": inc.get("dispatched_at"), "arrived_at": inc.get("arrived_at"),
+                    "finished_at": inc.get("finished_at") or (now if inc.get("status") == "Selesai" else None),
+                    "cancelled_at": inc.get("cancelled_at") or (now if inc.get("status") == "Dibatalkan" else None)})
+                for a in inc.get("assignments") or []:
+                    if self._row("SELECT id FROM assignment WHERE incident_id = ? AND member_id = ?",
+                                 (inc["id"], a["member_id"])) is not None:
+                        continue
+                    self._insert("assignment", {
+                        "id": new_id("asg"), "incident_id": inc["id"], "member_id": a["member_id"],
+                        "vehicle_id": a.get("vehicle_id"), "water_source_id": a.get("water_source_id"),
+                        "role": a.get("role"), "status": a.get("status", "Dispatched"),
+                        "created_at": now, "updated_at": None})
+                    counts["assignments"] += 1
+                counts["incidents"] += 1
+            self.conn.execute("INSERT OR REPLACE INTO config_key (key, value, updated_at) VALUES (?, ?, ?)",
+                              ("seed.incidents_loaded", "1", now))
+            with self._lock:
+                self.conn.commit()
 
         return counts
 
@@ -1145,6 +1153,37 @@ class Store:
         return {"date": date, "incidents_active": active, "incidents_finished": len(finished),
                 "km_total": sum(km_per_vehicle.values()), "km_per_vehicle": km_per_vehicle,
                 "refills": self.refills_today(date), "avg_response_minutes": avg, "weather": weather}
+
+    def reset_operations(self) -> dict:
+        """Surgical daily reset (docs/siren.md §Operations reset): clear the operational
+        day — incidents, assignments, reporter links and the event log are deleted (WS
+        buffer too) and members/vehicles go back to Standby. Accounts, crews, vehicles
+        and profiles, water sources, road restrictions and position pings stay: a new
+        day runs with the same brigade. Offline stays Offline (device not reporting).
+
+        Incident ids restart from I-1 afterwards — create_incident continues from the
+        highest existing number, which is empty again. The seed.incidents_loaded marker
+        survives, so a restart does not re-seed demo incidents. Callers should archive
+        the DB first if the day's history must survive. Returns cleared row counts.
+        """
+        with self._lock:
+            counts = {
+                "incidents": self.conn.execute("SELECT COUNT(*) FROM incident").fetchone()[0],
+                "assignments": self.conn.execute("SELECT COUNT(*) FROM assignment").fetchone()[0],
+                "reporter_links": self.conn.execute("SELECT COUNT(*) FROM reporter_link").fetchone()[0],
+                "events": self.conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0],
+            }
+            self.conn.execute("DELETE FROM incident")
+            self.conn.execute("DELETE FROM assignment")
+            self.conn.execute("DELETE FROM reporter_link")
+            self.conn.execute("DELETE FROM event_log")
+            self.conn.execute("UPDATE member SET status = 'Standby' WHERE status != 'Offline'")
+            self.conn.execute("UPDATE vehicle SET status = 'Standby' WHERE status != 'Offline'")
+            self.conn.commit()
+            self.event_buffer = []
+            self.last_event_id = None
+            self._event_seq = 0
+        return counts
 
     def snapshot(self) -> dict:
         """Full snapshot per contracts/events.json $defs.snapshot: config dump, stations,

@@ -588,3 +588,53 @@ def test_ws_vehicle_add_fuel_delete_reach_ops(env):
         assert receive_until(ws, "vehicle.fuel")["payload"]["fuel_pct"] == 30.0
         client.delete(f"/vehicles/{row['id']}", headers=ops)
         assert receive_until(ws, "vehicle.updated")["payload"]["removed"] is True
+
+
+def test_reset_operations_clears_day_keeps_master_data(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    iid = client.post("/incidents", headers=ops,
+                      json={"type": "Kebakaran ruko", "lat": -7.33, "lon": 108.21}).json()["id"]
+    client.post(f"/incidents/{iid}/assignments", headers=ops,
+                json={"members": ["A"], "vehicle_id": "v1"})
+    assert store.vehicle("v1")["status"] != "Standby"
+
+    resp = client.post("/reset-operations", headers=ops)
+    assert resp.status_code == 200, resp.text
+    cleared = resp.json()["cleared"]
+    assert cleared["incidents"] >= 1 and cleared["assignments"] >= 1
+
+    snap = client.get("/snapshot", headers=ops).json()
+    assert snap["incidents"] == [] and snap["assignments"] == []
+    assert snap["reporter_links"] == []
+    assert {v["status"] for v in snap["vehicles"]} == {"Standby"}
+    assert {m["status"] for m in snap["members"]} == {"Standby"}
+    assert len(client.get("/accounts", headers=ops).json()) >= 2  # accounts survive
+    assert snap["water_sources"] and snap["road_restrictions"]  # master data survives
+    assert [e["type"] for e in snap["event_log"]] == ["ops.reset"]
+    assert snap["stats_today"]["incidents_active"] == 0
+
+    again = client.post("/incidents", headers=ops, json={"type": "Evakuasi", "lat": -7.32, "lon": 108.2})
+    assert again.json()["id"] == "I-1"  # id sequence restarts after reset
+
+
+def test_reset_operations_requires_operator(env):
+    client, store, hub, clock = env
+    officer, _ = login(client, "a.asep")
+    resp = client.post("/reset-operations", headers=officer)
+    assert resp.status_code == 403
+
+
+def test_reset_does_not_reseed_demo_incidents(tmp_path):
+    # Reopening the SAME database after a reset must not resurrect the seed cases —
+    # only a brand-new database gets them (docs/siren.md §Operations reset).
+    db = tmp_path / "siren.sqlite"
+    app, store, hub = build_app(db_path=db, config_path=REPO_ROOT / "contracts" / "config.yaml",
+                                seed_dir=REPO_ROOT / "seed", routing_provider="estimate")
+    assert store.incidents("all")
+    store.reset_operations()
+    assert store.incidents("all") == []
+    app2, store2, hub2 = build_app(db_path=db, config_path=REPO_ROOT / "contracts" / "config.yaml",
+                                   seed_dir=REPO_ROOT / "seed", routing_provider="estimate")
+    assert store2.incidents("all") == []
+    assert len(store2.accounts()) >= 2 and store2.water_sources()  # master data intact

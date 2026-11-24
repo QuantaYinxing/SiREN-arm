@@ -91,6 +91,11 @@ def reporter_location_received(config: Config, inc_id: str) -> str:
     return f"{inc_id} · lokasi pelapor masuk dari tautan"
 
 
+def ops_reset(counts: dict) -> str:
+    return (f"operasi direset — {counts['incidents']} insiden, {counts['assignments']} penugasan, "
+            f"{counts['events']} log dibersihkan")
+
+
 def login(account: dict) -> str:
     return f"masuk: {account['username']} ({account['role']})"
 

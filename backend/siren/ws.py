@@ -39,6 +39,7 @@ SERVER_TYPES = {
     "restriction.updated",
     "waterSource.updated",
     "config.updated",
+    "ops.reset",
 }
 
 

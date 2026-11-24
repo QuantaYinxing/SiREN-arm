@@ -270,6 +270,10 @@
     {
       "type": "config.updated",
       "payload": {"type": "object", "required": ["key", "value"], "properties": {"key": {"type": "string"}, "value": {}}, "additionalProperties": false}
+    },
+    {
+      "type": "ops.reset",
+      "payload": {"type": "object", "required": ["cleared"], "properties": {"cleared": {"type": "object", "required": ["incidents", "assignments", "reporter_links", "events"], "properties": {"incidents": {"type": "integer"}, "assignments": {"type": "integer"}, "reporter_links": {"type": "integer"}, "events": {"type": "integer"}}}}, "additionalProperties": false}
     }
   ],
   "client_events": [

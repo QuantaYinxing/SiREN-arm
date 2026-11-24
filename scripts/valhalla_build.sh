@@ -38,12 +38,16 @@ fi
 # Config skeleton with the tile extract path and listen port (Valhalla's default
 # is 8002; contracts/config.yaml routing.valhalla_url expects 8081). The routing
 # section (truck/motorcycle/auto costing) comes from infra/valhalla.json.
+# Paths stay RELATIVE to the repo root: setup.sh and scripts/valhalla_keep.sh
+# cd there before starting valhalla_service, so the config survives a repo move
+# (absolute paths broke routing with "Tile extract could not be loaded" after
+# the tree moved from ~/SiREN to ~/Projects/SiREN).
 "$BIN/valhalla_build_config" \
-  --mjolnir-tile-dir "$PWD/$TILES_DIR" \
-  --mjolnir-tile-extract "$PWD/$TILES_DIR/valhalla_tiles.tar" \
+  --mjolnir-tile-dir "$TILES_DIR" \
+  --mjolnir-tile-extract "$TILES_DIR/valhalla_tiles.tar" \
   --httpd-service-listen "tcp://127.0.0.1:8081" -o "$CONFIG"
 ROOT="$PWD"
-python3 - "$CONFIG" infra/valhalla.json "$PWD/$TILES_DIR" <<'EOF'
+python3 - "$CONFIG" infra/valhalla.json "$TILES_DIR" "$PWD/$TILES_DIR" <<'EOF'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
 base = json.load(open(sys.argv[2]))
@@ -53,9 +57,13 @@ cfg["routing"] = base["routing"]
 # on laptops under RAM pressure.
 cfg["mjolnir"]["id_table_size"] = 20000000
 # Default build_config points admin/timezone DBs at /data (the container path);
-# the dev build keeps them next to the tiles inside the sandbox.
+# the dev build keeps them next to the tiles inside the sandbox. admin stays
+# repo-relative (read from the repo root); timezone stays absolute because
+# valhalla_build_timezones runs from the tiles dir, where relative paths would
+# resolve against the wrong cwd. tz is optional for this area — a moved repo
+# just loses it with a startup warning, routing does not care.
 cfg["mjolnir"]["admin"] = sys.argv[3] + "/admin.sqlite"
-cfg["mjolnir"]["timezone"] = sys.argv[3] + "/tz_world.sqlite"
+cfg["mjolnir"]["timezone"] = sys.argv[4] + "/tz_world.sqlite"
 # Verified flood polygons near the HQ run ~11 km around; the default 10 km
 # exclude-polygon limit would reject them.
 cfg["service_limits"]["max_exclude_polygons_length"] = 30000
@@ -80,8 +88,12 @@ fi
 nice -n 10 "$BIN/valhalla_build_tiles" -c "$CONFIG" -j "$THREADS" "$CROP"
 
 # Pack the tile directory into the single tar extract the Valhalla service reads.
-nice -n 10 "$BIN/valhalla_build_extract" -c "$CONFIG" -O \
-  -e "$TILES_DIR/valhalla_tiles.tar"
+# Drop any stale tar first and skip -e: with -e pointing at mjolnir.tile_extract,
+# the resolver reads THAT tar as its tile source (not tile_dir) and writes into
+# the same file it is reading — a rebuild repacked the old graph and died on a
+# truncated read instead of shipping the freshly built tiles.
+rm -f "$TILES_DIR/valhalla_tiles.tar"
+nice -n 10 "$BIN/valhalla_build_extract" -c "$CONFIG" -O
 
 echo "Done: $TILES_DIR/valhalla_tiles.tar ($(stat -c %s "$TILES_DIR/valhalla_tiles.tar") bytes)"
 echo "Serve: LD_LIBRARY_PATH=$PWD/.sandbox/lib $BIN/valhalla_service $CONFIG 1"

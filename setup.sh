@@ -6,6 +6,8 @@
 #   ./setup.sh database          server real mode + buka GUI /db/ (manage akun & anggota;
 #                                  DB tiap perangkat terpisah — .sandbox/data/siren.sqlite)
 # Opsi: ./setup.sh realmode --no-browser   (tanpa membuka browser)
+#       ./setup.sh realmode --fresh        (arsip siren.sqlite ke .sandbox/data/archive/,
+#                                  lalu reset operasi surgical — hari baru, regu sama)
 # Ctrl+C menghentikan server, tunnel, dan valhalla.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -19,11 +21,37 @@ esac
 PORT="${PORT:-8094}"
 PY=".sandbox/py/bin/python"
 OPEN=1
-[ "${2:-}" = "--no-browser" ] && OPEN=0
+FRESH=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-browser) OPEN=0 ;;
+    --fresh) FRESH=1 ;;
+  esac
+done
 
 if ss -tlnp 2>/dev/null | grep -qE ":$PORT\s"; then
   echo "port $PORT sudah dipakai — hentikan proses lain dulu" >&2
   exit 1
+fi
+
+# --fresh: start the day clean without losing the brigade. gamemode already wipes
+# its scratch DB on start, so the flag only matters for real/database modes:
+# copy the device DB to the archive, then the surgical store.reset_operations —
+# incidents/assignments/reporter links/event log gone, crew and vehicles Standby,
+# accounts, vehicles, water sources and restrictions survive (docs/siren.md).
+if [ "$FRESH" = "1" ] && [ "$SRV" = "real" ] && [ -f ".sandbox/data/siren.sqlite" ]; then
+  mkdir -p .sandbox/data/archive
+  STAMP="$(date +%Y%m%d-%H%M%S)"
+  cp ".sandbox/data/siren.sqlite" ".sandbox/data/archive/siren-$STAMP.sqlite"
+  echo "→ DB diarsip ke .sandbox/data/archive/siren-$STAMP.sqlite"
+  (cd backend && "../$PY" -c "
+from siren.config import Config
+from siren.store import Store
+import json
+cfg = Config.load('../contracts/config.yaml')
+st = Store('../.sandbox/data/siren.sqlite', cfg)
+print('→ operasi direset:', json.dumps(st.reset_operations()))"
+  ) || { echo "reset gagal — DB tidak berubah" >&2; exit 1; }
 fi
 
 cleanup() {

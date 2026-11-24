@@ -38,6 +38,7 @@ Every event, both directions:
 | `restriction.updated` | verification, rejection, or expiry | `restriction_id`, `status`, full `restriction` |
 | `waterSource.updated` | master data create/edit/disable | `water_source`, `removed: true` on delete |
 | `config.updated` | a config key changed | `key`, `value` |
+| `ops.reset` | operator reset the operational day (`POST /reset-operations`) | `cleared`: `{incidents, assignments, reporter_links, events}` |
 
 ## Client → server
 
@@ -102,6 +103,7 @@ format is snake_case (`vehicle_id`, `water_source_id`).
 | Reporter link | `POST /incidents/{id}/reporter-link` | `incident.updated` when location arrives |
 | Reporter sends location | `POST /reporter/{token}/location` (no auth) | `incident.updated` |
 | Top bar numbers | `GET /stats/today` | refreshed on `incident.updated` |
+| Reset operasi hari ini | `POST /reset-operations` | `ops.reset` |
 | Reconnect / first load | `GET /snapshot` or `WS snapshot.request` | snapshot reply |
 
 ## Versioning
