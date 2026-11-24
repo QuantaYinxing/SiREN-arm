@@ -181,7 +181,8 @@ class Simulator:
             tick = max(0.2, float(cfg.get("game.tick_seconds", 1)))
             speed = max(1.0, float(cfg.get("game.speed", 8)))
             await asyncio.sleep(tick / speed)
-            self.tick(self.store.now_seconds())
+            with self.store.write_batch():
+                self.tick(self.store.now_seconds())
 
     def tick(self, now: float) -> None:
         self.ticks += 1

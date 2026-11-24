@@ -266,6 +266,30 @@ class Store:
         self.event_buffer_limit = event_buffer_limit
         self.event_buffer: list[dict[str, Any]] = []
         self.last_event_id: str | None = None
+        self._batch_depth = 0
+
+    def _commit(self) -> None:
+        """Commit unless a write_batch is open; tick batching collapses a tick's many
+        small writes into one commit and frees the lock between ticks for snapshots."""
+        if self._batch_depth == 0:
+            self.conn.commit()
+
+    def write_batch(self):
+        """Context manager (same thread): hold the lock and defer commits until exit."""
+        class _Batch:
+            def __enter__(inner):
+                self._lock.acquire()
+                self._batch_depth += 1
+                return inner
+
+            def __exit__(inner, *exc):
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self.conn.commit()
+                self._lock.release()
+                return False
+
+        return _Batch()
 
     # ---- lifecycle ----
 
@@ -280,7 +304,7 @@ class Store:
                     self.conn.execute("PRAGMA table_info(vehicle)").fetchall()}
             if "fuel_pct" not in cols:
                 self.conn.execute("ALTER TABLE vehicle ADD COLUMN fuel_pct REAL NOT NULL DEFAULT 100")
-            self.conn.commit()
+            self._commit()
 
     def load_seed(self, seed_dir: Path) -> dict[str, int]:
         """Load seed/*.json (station, teams, accounts, vehicle profiles, vehicles,
@@ -407,7 +431,7 @@ class Store:
             self.conn.execute("INSERT OR REPLACE INTO config_key (key, value, updated_at) VALUES (?, ?, ?)",
                               ("seed.incidents_loaded", "1", now))
             with self._lock:
-                self.conn.commit()
+                self._commit()
 
         return counts
 
@@ -457,7 +481,7 @@ class Store:
                     " ON CONFLICT (key) DO UPDATE SET value = excluded.value,"
                     " updated_at = excluded.updated_at",
                     (key, json.dumps(value), now))
-            self.conn.commit()
+            self._commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -485,7 +509,7 @@ class Store:
         placeholders = ", ".join("?" for _ in data)
         with self._lock:
             self.conn.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})', tuple(data.values()))
-            self.conn.commit()
+            self._commit()
 
     def _update(self, table: str, id_: str, data: dict) -> dict:
         """Update given columns and return the new row. Raises NotFound if absent."""
@@ -493,7 +517,7 @@ class Store:
             if data:
                 sets = ", ".join(f'"{k}" = ?' for k in data)
                 self.conn.execute(f'UPDATE "{table}" SET {sets} WHERE id = ?', (*data.values(), id_))
-                self.conn.commit()
+                self._commit()
             row = self._row(f'SELECT * FROM "{table}" WHERE id = ?', (id_,))
         if row is None:
             raise NotFound(f"{table} {id_} not found")
@@ -622,7 +646,7 @@ class Store:
             self.conn.execute("UPDATE assignment SET vehicle_id = NULL WHERE vehicle_id = ?", (id_,))
             self.conn.execute("DELETE FROM water_level_reading WHERE vehicle_id = ?", (id_,))
             self.conn.execute("DELETE FROM vehicle WHERE id = ?", (id_,))
-            self.conn.commit()
+            self._commit()
         return row
 
     def water_sources(self, status: str = "all") -> list[dict]:
@@ -890,7 +914,7 @@ class Store:
         cutoff = now_iso(self._now() - timedelta(days=days))
         with self._lock:
             cur = self.conn.execute("DELETE FROM position_ping WHERE received_at < ?", (cutoff,))
-            self.conn.commit()
+            self._commit()
         return cur.rowcount
 
     # ---- restrictions ----
@@ -992,7 +1016,7 @@ class Store:
         if row["expires_at"] <= now:
             with self._lock:
                 self.conn.execute("UPDATE reporter_link SET status = 'expired' WHERE token = ?", (token,))
-                self.conn.commit()
+                self._commit()
             raise LinkError("reporter link expired")
         if row["status"] != "pending":
             raise LinkError(f"reporter link already {row['status']}")
@@ -1000,7 +1024,7 @@ class Store:
             self.conn.execute(
                 "UPDATE reporter_link SET status = 'received', used_at = ?, lat = ?, lon = ?, accuracy_m = ?"
                 " WHERE token = ?", (now, lat, lon, accuracy_m, token))
-            self.conn.commit()
+            self._commit()
         data: dict[str, Any] = {"lat": lat, "lon": lon, "reporter_link_id": token}
         if name is not None:
             data["reporter_name"] = name
@@ -1069,7 +1093,7 @@ class Store:
         row = self.account(id_)
         with self._lock:
             self.conn.execute("DELETE FROM account WHERE id = ?", (id_,))
-            self.conn.commit()
+            self._commit()
         return row
 
     def delete_member(self, id_: str) -> dict:
@@ -1078,7 +1102,7 @@ class Store:
             raise NotFound(f"member {id_} not found")
         with self._lock:
             self.conn.execute("DELETE FROM member WHERE id = ?", (id_,))
-            self.conn.commit()
+            self._commit()
         return row
 
     # ---- log & WS buffer ----
@@ -1185,7 +1209,7 @@ class Store:
             self.conn.execute("DELETE FROM event_log")
             self.conn.execute("UPDATE member SET status = 'Standby' WHERE status != 'Offline'")
             self.conn.execute("UPDATE vehicle SET status = 'Standby' WHERE status != 'Offline'")
-            self.conn.commit()
+            self._commit()
             self.event_buffer = []
             self.last_event_id = None
             self._event_seq = 0
