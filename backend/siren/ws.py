@@ -59,9 +59,19 @@ class Hub:
         return {"id": f"ev_{self._seq}", "type": etype, "ts": self.store.now_iso(), "v": 1, "payload": payload}
 
     def broadcast(self, envelope: dict) -> None:
-        """Push an envelope to every connected client; non-contract types are dropped."""
+        """Push an envelope to every connected client; non-contract types are dropped.
+        member.position is coalesced to one per member per position_min_interval seconds
+        (wall clock) so crew pings at game speeds do not thrash every client; the latest
+        position is always in the DB snapshot and the next broadcast carries it."""
         if envelope.get("type") not in SERVER_TYPES:
             return
+        if envelope.get("type") == "member.position":
+            member_id = envelope.get("payload", {}).get("member_id")
+            now = time.monotonic()
+            last = self._last_position.get(member_id)
+            if last is not None and now - last < self.position_min_interval:
+                return
+            self._last_position[member_id] = now
         for queue in list(self.clients):
             queue.put_nowait(envelope)
 
@@ -137,16 +147,13 @@ class Hub:
         except NotFound:
             await ws.send_json(self._envelope("error", {"message": f"member {member_id} not found"}))
             return
-        now = time.monotonic()
-        if now - self._last_position.get(member_id, -1e9) >= self.position_min_interval:
-            self._last_position[member_id] = now
-            self.broadcast(self._envelope("member.position", {
-                "member_id": member_id,
-                "vehicle_id": payload.get("vehicle_id"),
-                "position": result["position"],
-                "freshness": result["freshness"],
-                "position_age_seconds": result["position_age_seconds"],
-            }))
+        self.broadcast(self._envelope("member.position", {
+            "member_id": member_id,
+            "vehicle_id": payload.get("vehicle_id"),
+            "position": result["position"],
+            "freshness": result["freshness"],
+            "position_age_seconds": result["position_age_seconds"],
+        }))
 
     async def _status(self, ws: WebSocket, meta: dict, payload: dict) -> None:
         member_id = payload.get("member_id") or meta.get("member_id")
