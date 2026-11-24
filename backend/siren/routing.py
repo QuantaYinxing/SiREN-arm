@@ -323,13 +323,16 @@ def water_options(config: Config, store: Any, vehicle_id: str, incident_id: str)
 
     # Nearest-N first: the ranking shows routing.max_options anyway, so building the
     # matrix over the closest sources bounds Valhalla calls when many are active.
-    veh_pos = (veh["lat"], veh["lon"])
+    # Vehicles without any known position (never pinged) keep the plain order.
+    veh_pos = (veh["lat"], veh["lon"]) if veh.get("lat") is not None and veh.get("lon") is not None else None
     limit_sources = int(config.get("routing.matrix_max_sources", 6))
 
     def _dist(ws: dict) -> float:
         return min(haversine_km(veh_pos, (p["lat"], p["lon"])) for p in ws["access_points"])
 
-    sources = sorted(store.water_sources(status="active"), key=_dist)[:limit_sources]
+    sources = store.water_sources(status="active")
+    if veh_pos is not None:
+        sources = sorted(sources, key=_dist)[:limit_sources]
 
     options: list[dict] = []
     for ws in sources:
