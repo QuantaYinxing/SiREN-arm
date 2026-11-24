@@ -113,6 +113,50 @@ def test_member_add_delete_and_busy_guard(env):
     assert store.member("A") is not None
 
 
+def test_vehicle_add_custom_name_and_delete(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    off, _ = login(client, "a.asep")
+    created = client.post("/vehicles", json={"name": "Mobil Angkut Air", "vehicle_type": "patrol_car",
+                                             "team_id": "t1", "plate": "Z 1234 XY", "fuel_pct": 80}, headers=ops)
+    assert created.status_code == 201, created.text
+    row = created.json()
+    assert row["name"] == "Mobil Angkut Air" and row["fuel_pct"] == 80.0
+    assert row["id"] in [v["id"] for v in client.get("/vehicles").json()]
+    assert client.post("/vehicles", json={"name": "Tanpa jenis"}, headers=ops).status_code == 400
+    assert client.post("/vehicles", json={"name": "X", "vehicle_type": "helicopter"}, headers=ops).status_code == 400
+    assert client.post("/vehicles", json={"name": "X", "vehicle_type": "truck", "fuel_pct": 120}, headers=ops).status_code == 400
+    assert client.delete(f"/vehicles/{row['id']}", headers=off).status_code == 403
+    assert client.delete(f"/vehicles/{row['id']}", headers=ops).status_code == 200
+    assert client.get(f"/vehicles/{row['id']}", headers=ops).status_code == 404
+    assert row["id"] not in [v["id"] for v in client.get("/vehicles").json()]
+
+
+def test_vehicle_delete_busy_guard(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.102, "lon": 107.77}, headers=ops).json()["id"]
+    client.post(f"/incidents/{iid}/assignments", json={"members": ["A"], "vehicle_id": "v3"}, headers=ops)
+    assert client.delete("/vehicles/v3", headers=ops).status_code == 409
+    assert client.get("/vehicles/v3").json()["status"] == "Dispatched"
+
+
+def test_fuel_gauge_reporting_and_dispatch_warning(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    off, _ = login(client, "a.asep")
+    assert client.post("/vehicles/v1/fuel", json={"fuel_pct": 42}, headers=off).json()["fuel_pct"] == 42.0
+    assert client.get("/vehicles/v1").json()["fuel_pct"] == 42.0
+    assert client.post("/vehicles/v1/fuel", json={}, headers=ops).status_code == 400
+    assert client.post("/vehicles/v1/fuel", json={"fuel_pct": 120}, headers=ops).status_code == 400
+    assert client.post("/vehicles/v1/fuel", json={"fuel_pct": "x"}, headers=ops).status_code == 400
+    assert client.post("/vehicles/v1/fuel", json={"fuel_pct": 10}, headers=off).status_code == 200
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.102, "lon": 107.77}, headers=ops).json()["id"]
+    resp = client.post(f"/incidents/{iid}/assignments", json={"members": ["A"], "vehicle_id": "v1"}, headers=ops)
+    assert resp.status_code == 201, resp.text
+    assert any("bensin" in w for w in resp.json()["warnings"])
+
+
 def test_config_put_requires_operator(env):
     client, store, hub, clock = env
     ops, _ = login(client, "operator")
@@ -528,3 +572,19 @@ def test_ws_broadcast_reaches_operator_on_dispatch(env):
         client.post(f"/incidents/{iid}/assignments", json={"members": ["A"], "vehicle_id": "v1"}, headers=ops)
         assert receive_until(ws, "assignment.updated")["payload"]["incident_id"] == iid
         assert receive_until(ws, "incident.updated")["payload"]["status"] == "Dispatched"
+
+
+def test_ws_vehicle_add_fuel_delete_reach_ops(env):
+    client, store, hub, clock = env
+    ops, _ = login(client, "operator")
+    with client.websocket_connect("/ws?app=ops") as ws:
+        ws.send_json({"type": "snapshot.request", "payload": {}})
+        snap = ws.receive_json()
+        assert all("fuel_pct" in v for v in snap["payload"]["vehicles"])
+        row = client.post("/vehicles", json={"name": "Mobil Angkut Air", "vehicle_type": "patrol_car"},
+                          headers=ops).json()
+        assert receive_until(ws, "vehicle.updated")["payload"]["vehicle"]["name"] == "Mobil Angkut Air"
+        client.post("/vehicles/v1/fuel", json={"fuel_pct": 30}, headers=ops)
+        assert receive_until(ws, "vehicle.fuel")["payload"]["fuel_pct"] == 30.0
+        client.delete(f"/vehicles/{row['id']}", headers=ops)
+        assert receive_until(ws, "vehicle.updated")["payload"]["removed"] is True

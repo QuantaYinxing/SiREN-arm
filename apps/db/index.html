@@ -12,6 +12,7 @@
   <div class="kpis">
     <div class="kpi"><b id="cnt">—</b><small>akun</small></div>
     <div class="kpi"><b id="mcnt">—</b><small>anggota</small></div>
+    <div class="kpi"><b id="vcnt">—</b><small>kendaraan</small></div>
     <div class="kpi" style="min-width:140px"><small class="mono" id="who"></small></div>
   </div>
 </header>
@@ -47,6 +48,18 @@
       <button class="btn go" id="bm">Tambah anggota</button>
     </div>
   </div>
+  <div class="box">
+    <h4>Kendaraan</h4>
+    <div id="vrows" style="display:flex;flex-direction:column;gap:4px"></div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap">
+      <input id="vn" placeholder="nama kendaraan" style="min-width:140px">
+      <input id="vplate" placeholder="plat (opsional)" style="min-width:120px">
+      <select id="vt"></select>
+      <select id="vteam"></select>
+      <input id="vfuel" type="number" min="0" max="100" value="100" style="width:90px" title="bensin % saat masuk database">
+      <button class="btn go" id="bv">Tambah kendaraan</button>
+    </div>
+  </div>
 </main>
 
 <div id="toast"></div>
@@ -55,7 +68,7 @@
 import { login, loadCredentials, rest, errText } from '/shared/api.js';
 
 const $ = (s) => document.querySelector(s);
-let accs = [], mems = [], teams = [], roles = [], rmem = {};
+let accs = [], mems = [], teams = [], roles = [], rmem = {}, vehs = [], profiles = [], vtypes = {};
 
 function toast(t) {
   $('#toast').textContent = t;
@@ -78,14 +91,18 @@ async function load() {
   accs = await rest('GET', '/accounts');
   mems = await rest('GET', '/members');
   teams = await rest('GET', '/teams');
+  vehs = await rest('GET', '/vehicles');
+  profiles = await rest('GET', '/vehicle-profiles');
   roles = (await rest('GET', '/config/auth.roles')).value;
   rmem = (await rest('GET', '/config/roles_member')).value;
+  vtypes = (await rest('GET', '/config/vehicle_types')).value;
   render();
 }
 
 function render() {
   $('#cnt').textContent = accs.length;
   $('#mcnt').textContent = mems.length;
+  $('#vcnt').textContent = vehs.length;
   $('#accrows').innerHTML = accs.map((a) => `<div class="rw" style="grid-template-columns:1fr 110px 1fr 170px auto">
     <b>${esc(a.username)}</b>
     <span class="chip" style="--c:var(--wat)">${esc(a.role)}</span>
@@ -100,11 +117,22 @@ function render() {
     <span class="chip" style="--c:var(--acc)">${esc(m.status)}</span>
     <button class="btn" data-op="mdel" data-id="${m.id}">Hapus</button>
   </div>`).join('') || '<div class="mu">tidak ada anggota</div>';
+  $('#vrows').innerHTML = vehs.map((v) => `<div class="rw" style="grid-template-columns:1fr 120px 1fr 1fr 170px auto">
+    <b>${esc(v.name)}</b>
+    <span class="mu mono">${esc(v.plate ?? '—')}</span>
+    <span class="mu">${esc(vtypes[v.vehicle_type]?.label ?? v.vehicle_type)}</span>
+    <span class="mu">${v.team_id ? esc(teamName(v.team_id)) : 'tanpa regu'}</span>
+    <span class="chip" style="--c:${v.fuel_pct <= 20 ? '#f43f5e' : 'var(--acc)'}">bensin ${Math.round(v.fuel_pct)}% · ${esc(v.status)}</span>
+    <button class="btn" data-op="vdel" data-id="${v.id}">Hapus</button>
+  </div>`).join('') || '<div class="mu">tidak ada kendaraan</div>';
   $('#ar').innerHTML = roles.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
   $('#am').innerHTML = '<option value="">tanpa anggota</option>' +
     mems.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${esc(m.id)})</option>`).join('');
   $('#mt').innerHTML = teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} (${esc(t.id)})</option>`).join('');
   $('#mr').innerHTML = Object.entries(rmem).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label ?? k)}</option>`).join('');
+  $('#vt').innerHTML = Object.entries(vtypes).map(([k, o]) => `<option value="${esc(k)}">${esc(o.label ?? k)}</option>`).join('');
+  $('#vteam').innerHTML = '<option value="">tanpa regu</option>' +
+    teams.map((t) => `<option value="${esc(t.id)}">${esc(t.name)} (${esc(t.id)})</option>`).join('');
 }
 
 document.addEventListener('click', async (e) => {
@@ -123,6 +151,10 @@ document.addEventListener('click', async (e) => {
     } else if (b.dataset.op === 'mdel') {
       await rest('DELETE', `/members/${b.dataset.id}`);
       toast('anggota dihapus');
+      await load();
+    } else if (b.dataset.op === 'vdel') {
+      await rest('DELETE', `/vehicles/${b.dataset.id}`);
+      toast('kendaraan dihapus');
       await load();
     }
   } catch (err) { toast(errText(err)); }
@@ -144,6 +176,22 @@ $('#bm').addEventListener('click', async () => {
     await rest('POST', '/members', { name: $('#mn').value, team_id: $('#mt').value, role: $('#mr').value });
     $('#mn').value = '';
     toast('anggota dibuat');
+    await load();
+  } catch (err) { toast(errText(err)); }
+});
+
+$('#bv').addEventListener('click', async () => {
+  if (!$('#vn').value.trim()) { toast('nama kendaraan wajib'); return; }
+  try {
+    const type = $('#vt').value;
+    const fuel = Number($('#vfuel').value);
+    const body = { name: $('#vn').value.trim(), plate: $('#vplate').value.trim() || null,
+      vehicle_type: type, profile_id: profiles.find((p) => p.vehicle_type === type)?.id ?? null,
+      fuel_pct: Number.isFinite(fuel) ? Math.max(0, Math.min(100, fuel)) : 100 };
+    if ($('#vteam').value) body.team_id = $('#vteam').value;
+    await rest('POST', '/vehicles', body);
+    $('#vn').value = $('#vplate').value = '';
+    toast('kendaraan dibuat');
     await load();
   } catch (err) { toast(errText(err)); }
 });

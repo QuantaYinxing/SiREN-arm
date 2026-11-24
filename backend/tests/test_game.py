@@ -171,6 +171,34 @@ def test_crew_lifecycle_dispatch_to_selesai(tmp_path):
     assert "incident.updated" in log_types and "member.status" in log_types
 
 
+def test_fuel_burns_while_moving_and_refills_at_post(tmp_path):
+    client, store, hub, clock, app = make_env(tmp_path)
+    ops = login(client)
+    store.config = store.config.replaced("game.fuel_per_km.patrol_car", 10.0)
+    sim = app.state.sim
+    iid = client.post("/incidents", json={"type": "Kebakaran ruko", "lat": -7.288, "lon": 108.246},
+                      headers=ops).json()["id"]
+    resp = client.post(f"/incidents/{iid}/assignments",
+                       json={"members": ["A"], "vehicle_id": "v3"}, headers=ops)
+    assert resp.status_code == 201, resp.text
+    route_min = resp.json()["route"]["total_minutes"]
+
+    clock.advance(store.config.get("game.departure_delay_minutes", 1) + 0.1)
+    sim.tick(store.now_seconds())
+    clock.advance(route_min + 0.1)
+    sim.tick(store.now_seconds())
+    assert store.vehicle("v3")["fuel_pct"] < 100.0
+    log_types = [row["type"] for row in store.event_log(50)]
+    assert "vehicle.fuel" in log_types
+
+    clock.advance(store.config.get("game.scene_minutes", 12) + 30)
+    sim.tick(store.now_seconds())
+    clock.advance(30)
+    sim.tick(store.now_seconds())
+    assert store.incident(iid)["status"] == "Selesai"
+    assert store.vehicle("v3")["fuel_pct"] == 100.0
+
+
 def test_standby_pings_keep_freshness_live(tmp_path):
     client, store, hub, clock, app = make_env(tmp_path)
     sim = app.state.sim

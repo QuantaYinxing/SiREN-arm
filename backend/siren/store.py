@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS vehicle (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, plate TEXT, vehicle_type TEXT NOT NULL,
   profile_id TEXT, team_id TEXT, pump_flow_lpm REAL, tank_capacity_l REAL,
   status TEXT NOT NULL DEFAULT 'Standby', lat REAL, lon REAL, eta_minutes REAL,
+  fuel_pct REAL NOT NULL DEFAULT 100 CHECK (fuel_pct BETWEEN 0 AND 100),
   updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS account (
@@ -133,7 +134,7 @@ ACTIVE_INCIDENT_STATUSES = ("Baru", "Dispatched", "EnRoute", "OnScene", "Returni
 _MEMBER_KEYS = ("id", "name", "role", "team_id", "vehicle_id", "status", "freshness",
                 "position", "position_age_seconds", "updated_at")
 _VEHICLE_KEYS = ("id", "name", "plate", "vehicle_type", "profile_id", "team_id", "status",
-                 "position", "eta_minutes", "water_level", "water_level_source",
+                 "position", "eta_minutes", "fuel_pct", "water_level", "water_level_source",
                  "water_level_confirmed_at", "estimated", "km_today", "pump_flow_lpm")
 _INCIDENT_KEYS = ("id", "type", "address", "description", "reporter_name", "status",
                   "created_at", "dispatched_at", "arrived_at", "finished_at", "cancelled_at")
@@ -266,6 +267,13 @@ class Store:
         """Create tables/indexes from SCHEMA_SQL."""
         with self._lock:
             self.conn.executescript(SCHEMA_SQL)
+            # Dev databases created before the fuel gauge exist without the column;
+            # SQLite cannot add a CHECK on ALTER, so the 0-100 bound lives at the
+            # application layer (API validation + record_fuel clamp).
+            cols = {row["name"] for row in
+                    self.conn.execute("PRAGMA table_info(vehicle)").fetchall()}
+            if "fuel_pct" not in cols:
+                self.conn.execute("ALTER TABLE vehicle ADD COLUMN fuel_pct REAL NOT NULL DEFAULT 100")
             self.conn.commit()
 
     def load_seed(self, seed_dir: Path) -> dict[str, int]:
@@ -318,7 +326,8 @@ class Store:
                 "vehicle_type": v["vehicle_type"], "profile_id": v.get("profile_id"),
                 "team_id": v.get("team_id"), "pump_flow_lpm": v.get("pump_flow_lpm"),
                 "tank_capacity_l": v.get("tank_capacity_l"), "status": v.get("status", "Standby"),
-                "lat": v.get("lat"), "lon": v.get("lon"), "eta_minutes": None, "updated_at": None})
+                "lat": v.get("lat"), "lon": v.get("lon"), "eta_minutes": None,
+                "fuel_pct": float(v.get("fuel_pct", 100)), "updated_at": None})
             counts["vehicles"] += 1
 
         for m in seed("members") or []:
@@ -573,7 +582,7 @@ class Store:
             "team_id": data.get("team_id"), "pump_flow_lpm": data.get("pump_flow_lpm"),
             "tank_capacity_l": data.get("tank_capacity_l"), "status": data.get("status", "Standby"),
             "lat": data.get("lat"), "lon": data.get("lon"), "eta_minutes": data.get("eta_minutes"),
-            "updated_at": data.get("updated_at")})
+            "fuel_pct": float(data.get("fuel_pct", 100)), "updated_at": data.get("updated_at")})
         return self.vehicle(id_)
 
     def update_vehicle(self, id_: str, data: dict) -> dict:
@@ -583,6 +592,24 @@ class Store:
     def set_vehicle_status(self, vehicle_id: str, status: str) -> dict:
         """Store-level write; the transition is validated by the caller."""
         return self.update_vehicle(vehicle_id, {"status": status, "updated_at": self.now_iso()})
+
+    def record_fuel(self, vehicle_id: str, fuel_pct: float) -> dict:
+        """Set the fuel gauge (percent, clamped to 0-100) and return the vehicle row."""
+        pct = max(0.0, min(100.0, float(fuel_pct)))
+        return self.update_vehicle(vehicle_id, {"fuel_pct": pct, "updated_at": self.now_iso()})
+
+    def delete_vehicle(self, id_: str) -> dict:
+        """Hard delete (the DB GUI removes vehicles): detached references mirror the
+        PostgreSQL ON DELETE behaviour — members/assignments lose the vehicle,
+        water readings are removed with it."""
+        row = self.vehicle(id_)
+        with self._lock:
+            self.conn.execute("UPDATE member SET vehicle_id = NULL WHERE vehicle_id = ?", (id_,))
+            self.conn.execute("UPDATE assignment SET vehicle_id = NULL WHERE vehicle_id = ?", (id_,))
+            self.conn.execute("DELETE FROM water_level_reading WHERE vehicle_id = ?", (id_,))
+            self.conn.execute("DELETE FROM vehicle WHERE id = ?", (id_,))
+            self.conn.commit()
+        return row
 
     def water_sources(self, status: str = "all") -> list[dict]:
         """Rows with `access_points` merged in."""

@@ -30,6 +30,10 @@ Every event, both directions:
 | `member.position` | a position ping was accepted | `member_id`, optional `vehicle_id`, `position`, `freshness`, `position_age_seconds` |
 | `member.status` | duty status changed (REST or `status.set`) | `member_id`, `status`, optional `incident_id` |
 | `vehicle.water_level` | manual reading or automatic estimate tick | `vehicle_id`, `level` (0-4), `source`, `confirmed_at` |
+| `vehicle.fuel` | fuel gauge report, simulator burn, or refuel at post | `vehicle_id`, `fuel_pct` (0-100) |
+| `vehicle.updated` | vehicle added / edited / removed in the database | `vehicle_id`, full `vehicle`, `removed: true` on removal |
+| `team.updated` | team added | `team_id`, full `team` |
+| `member.updated` | member added, edited, or removed | `member_id`, full `member`, `removed: true` on removal |
 | `restriction.reported` | officer/operator marked a road | `restriction` (status `pending`) |
 | `restriction.updated` | verification, rejection, or expiry | `restriction_id`, `status`, full `restriction` |
 | `waterSource.updated` | master data create/edit/disable | `water_source`, `removed: true` on delete |
@@ -90,6 +94,9 @@ format is snake_case (`vehicle_id`, `water_source_id`).
 | Position reporting | `WS position.ping` | `member.position` |
 | Update water level | `POST /vehicles/{id}/water-level` | `vehicle.water_level` |
 | Refill finished | `POST /vehicles/{id}/refill-done` | `vehicle.water_level` |
+| Update fuel gauge (bensin) | `POST /vehicles/{id}/fuel` | `vehicle.fuel` |
+| Add vehicle (custom name) | `POST /vehicles` | `vehicle.updated` |
+| Remove vehicle | `DELETE /vehicles/{id}` | `vehicle.updated` with `removed: true` |
 | "This road doesn't fit" | `POST /road-restrictions` | `restriction.reported` |
 | Verify / reject restriction | `POST /road-restrictions/{id}/verify` | `restriction.updated` |
 | Reporter link | `POST /incidents/{id}/reporter-link` | `incident.updated` when location arrives |

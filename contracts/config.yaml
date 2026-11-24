@@ -153,6 +153,10 @@ game:
   departure_delay_minutes: 1
   scene_minutes: 12
   consume_per_minute: 0.3   # tank level units drained per virtual minute at the scene
+  fuel_per_km:              # fuel % consumed per km driven (simulator odometer burn)
+    truck: 0.5
+    motorbike: 0.15
+    patrol_car: 0.25
   standby_jitter_deg: 0.004
   stale_skip_probability: 0.06   # skipped standby pings -> freshness goes stale/offline on its own
   restriction_report_probability: 0.02
@@ -199,11 +203,15 @@ water:
   refill_confirm: true          # "refill finished" resets to full only after confirm
   low_level_threshold: 1        # level <= this -> refill-first scoring (score = A + isi ulang + B)
 
+fuel:
+  low_threshold_pct: 20         # gauge turns red and dispatch warns below this percent
+
 dispatch:
   max_members_per_assignment: 12
   warn_cross_team: true
   warn_missing_vehicle: true
   warn_vehicle_in_use: true
+  warn_low_fuel: true
   warn_stale_gps: true
 
 reporter_link:

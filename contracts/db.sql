@@ -61,6 +61,8 @@ CREATE TABLE vehicle (
   lat            DOUBLE PRECISION,
   lon            DOUBLE PRECISION,
   eta_minutes    DOUBLE PRECISION,                -- last planned route ETA; cleared on Standby
+  fuel_pct       DOUBLE PRECISION NOT NULL DEFAULT 100
+    CHECK (fuel_pct BETWEEN 0 AND 100),           -- bensin gauge (percent)
   updated_at     TIMESTAMPTZ,
   CHECK (status <> '')
 );

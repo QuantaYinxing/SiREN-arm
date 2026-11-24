@@ -84,7 +84,7 @@ def test_load_seed_counts_and_is_idempotent(tmp_path):
 
     store2, _ = make_store(tmp_path / "fresh.sqlite")
     first = store2.load_seed(SEED_DIR)
-    assert first == {"station": 1, "teams": 2, "vehicle_profiles": 3, "vehicles": 2,
+    assert first == {"station": 1, "teams": 2, "vehicle_profiles": 3, "vehicles": 4,
                      "members": 6, "accounts": 7, "water_sources": len(_seed("water_sources")),
                      "road_restrictions": 2,
                      "incidents": 2, "assignments": 3}
@@ -101,6 +101,9 @@ def test_seed_content_and_status_consistency(tmp_path):
         "type": "truck", "use_osm_trucking_on_road": False, "max_haulage_costing": True}
     assert store.vehicle("v1")["plate"] == "Z 8123 AB"
     assert store.vehicle("v2")["team_id"] == "t2"
+    assert store.vehicle("v3")["vehicle_type"] == "patrol_car"
+    assert store.vehicle("v3")["fuel_pct"] == 88.0
+    assert store.vehicle("v4")["vehicle_type"] == "motorbike"
     members = store.members()
     assert sorted(m["id"] for m in members) == ["A", "B", "C", "D", "E", "F"]
     assert all(m["status"] == "Standby" for m in members)
@@ -176,6 +179,42 @@ def test_vehicle_crud(tmp_path):
     assert updated["eta_minutes"] == 8
     assert store.set_vehicle_status("v1", "Dispatched")["status"] == "Dispatched"
     assert store.vehicle_position("v1") == (-7.15, 107.7)
+
+
+def test_vehicle_fuel_gauge(tmp_path):
+    store, _ = make_store(tmp_path / "db.sqlite")
+    team_member(store, vehicle_id="v1")
+    assert store.vehicle("v1")["fuel_pct"] == 100.0
+    assert store.record_fuel("v1", 45)["fuel_pct"] == 45.0
+    assert store.record_fuel("v1", 150)["fuel_pct"] == 100.0  # clamped to full tank
+    assert store.record_fuel("v1", -10)["fuel_pct"] == 0.0
+
+
+def test_vehicle_delete_detaches_references(tmp_path):
+    store, _ = make_store(tmp_path / "db.sqlite")
+    team_member(store, vehicle_id="v1")
+    store.record_water_level("v1", 3, "operator")
+    incident = store.create_incident({"type": "Kebakaran ruko", "lat": -7.2, "lon": 107.7})
+    store.create_assignments(incident["id"], ["A"], vehicle_id="v1")
+    removed = store.delete_vehicle("v1")
+    assert removed["id"] == "v1"
+    assert store.member("A")["vehicle_id"] is None
+    assert store.assignments(incident["id"])[0]["vehicle_id"] is None
+    assert store.latest_water_reading("v1") is None
+    with pytest.raises(NotFound):
+        store.vehicle("v1")
+
+
+def test_init_schema_migrates_database_without_fuel_column(tmp_path):
+    """Dev databases created before the fuel gauge gain the column on the next init."""
+    store, _ = make_store(tmp_path / "db.sqlite")
+    store.init_schema()
+    with store._lock:
+        store.conn.execute("ALTER TABLE vehicle DROP COLUMN fuel_pct")
+        store.conn.commit()
+    store.init_schema()
+    assert "fuel_pct" in {r["name"] for r in store._rows("PRAGMA table_info(vehicle)")}
+    assert store.create_vehicle({"id": "v1", "name": "Truk", "vehicle_type": "truck"})["fuel_pct"] == 100.0
 
 
 def test_water_source_crud_and_soft_delete(tmp_path):

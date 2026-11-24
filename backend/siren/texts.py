@@ -57,6 +57,14 @@ def refill_done(config: Config, vehicle_name: str) -> str:
     return f"{vehicle_name} isi ulang selesai — {config.level_label(config.max_level())}"
 
 
+def vehicle_fuel(vehicle_name: str, fuel_pct: float) -> str:
+    return f"{vehicle_name} bensin {fuel_pct:.0f}%"
+
+
+def fuel_refilled(vehicle_name: str) -> str:
+    return f"{vehicle_name} isi bensin di pos — penuh"
+
+
 def restriction_reported(config: Config, reporter: str, reason: str) -> str:
     return f"{reporter}: {_status(config, 'restriction_reason', reason)} (menunggu verifikasi)"
 
@@ -101,6 +109,10 @@ def warn_cross_team(count: int) -> str:
 
 def warn_vehicle_in_use(vehicle_name: str, status_label: str) -> str:
     return f"Kendaraan {vehicle_name} sedang {status_label} — tetap dipakai?"
+
+
+def warn_low_fuel(vehicle_name: str, fuel_pct: float) -> str:
+    return f"Kendaraan {vehicle_name} bensin tinggal {fuel_pct:.0f}% — isi dulu?"
 
 
 def warn_stale_gps(member_name: str, freshness: str, age_seconds: float | None) -> str:

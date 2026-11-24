@@ -13,7 +13,8 @@ Geography is the real coverage area (docs/next-real-maps_done.md):
   rivers, tanks/towers. **Every entry is marked unverified**
   (`notes: "OSM placeholder, needs field survey"`); the brigade still has to confirm
   names, truck access, and capacity (§12.3).
-- `vehicles.json` — trucks parked at the station; `road_restrictions.json` —
+- `vehicles.json` — vehicles parked at the station: two trucks, a patrol car, a motorbike;
+  `fuel_pct` is the fuel gauge (bensin) percentage. `road_restrictions.json` —
   placeholder geometries near the station, flagged for field verification.
 - `vehicle_profiles.json` — truck dimensions are **ASSUMPTION placeholders**
   (width 2.5 m, height 3.2 m, length 8.0 m, gross weight 12 t): real figures are

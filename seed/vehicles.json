@@ -8,6 +8,7 @@
     "team_id": "t1",
     "pump_flow_lpm": 800,
     "tank_capacity_l": 4000,
+    "fuel_pct": 100,
     "status": "Standby",
     "lat": -7.311924330474647,
     "lon": 108.19915732405596
@@ -21,6 +22,35 @@
     "team_id": "t2",
     "pump_flow_lpm": 800,
     "tank_capacity_l": 4000,
+    "fuel_pct": 96,
+    "status": "Standby",
+    "lat": -7.311924330474647,
+    "lon": 108.19915732405596
+  },
+  {
+    "id": "v3",
+    "name": "Mobil Patroli 1",
+    "plate": "Z 8125 AB",
+    "vehicle_type": "patrol_car",
+    "profile_id": "vp_patrol",
+    "team_id": "t1",
+    "pump_flow_lpm": null,
+    "tank_capacity_l": null,
+    "fuel_pct": 88,
+    "status": "Standby",
+    "lat": -7.311924330474647,
+    "lon": 108.19915732405596
+  },
+  {
+    "id": "v4",
+    "name": "Motor Damkar 1",
+    "plate": "Z 8126 AB",
+    "vehicle_type": "motorbike",
+    "profile_id": "vp_moto",
+    "team_id": "t2",
+    "pump_flow_lpm": null,
+    "tank_capacity_l": null,
+    "fuel_pct": 74,
     "status": "Standby",
     "lat": -7.311924330474647,
     "lon": 108.19915732405596

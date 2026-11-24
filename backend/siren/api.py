@@ -79,6 +79,8 @@ def dispatch_warnings(config: Config, store: Store, members: list[dict], vehicle
         veh = store.vehicle(vehicle_id)
         if veh["status"] != "Standby" and flags.get("warn_vehicle_in_use", True):
             warnings.append(texts.warn_vehicle_in_use(veh["name"], config.label("vehicle_status", veh["status"])))
+        if veh["fuel_pct"] <= float(config.get("fuel.low_threshold_pct", 20)) and flags.get("warn_low_fuel", True):
+            warnings.append(texts.warn_low_fuel(veh["name"], veh["fuel_pct"]))
     if flags.get("warn_stale_gps", True):
         for m in members:
             fresh, age = store.freshness(m["id"])
@@ -353,7 +355,7 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
     def create_team(request: Request, body: dict = Body(...)) -> dict:
         account = _account(request, role="operator")
         row = store.create_team(body)
-        emit(request, "config.updated", {"kind": "team", "team": row},
+        emit(request, "team.updated", {"team_id": row["id"], "team": row},
              texts.master_data("regu", "ditambah", row["name"]), account)
         return row
 
@@ -365,7 +367,7 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
     def create_member(request: Request, body: dict = Body(...)) -> dict:
         account = _account(request, role="operator")
         row = store.create_member(body)
-        emit(request, "config.updated", {"kind": "member", "member": row},
+        emit(request, "member.updated", {"member_id": row["id"], "member": row},
              texts.master_data("anggota", "ditambah", row["name"]), account)
         return row
 
@@ -408,7 +410,7 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
     def create_profile(request: Request, body: dict = Body(...)) -> dict:
         account = _account(request, role="operator")
         row = store.create_profile(body)
-        emit(request, "config.updated", {"kind": "vehicle_profile", "vehicle_profile": row},
+        emit(request, "config.updated", {"key": f"vehicle_profiles.{row['id']}", "value": row},
              texts.master_data("profil kendaraan", "ditambah", row["name"]), account)
         return row
 
@@ -419,8 +421,23 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
     @app.post("/vehicles", status_code=201)
     def create_vehicle(request: Request, body: dict = Body(...)) -> dict:
         account = _account(request, role="operator")
+        if "vehicle_type" not in body:
+            raise ValueError("vehicle_type is required")
+        config.validate("vehicle_types", body["vehicle_type"])
+        if body.get("profile_id"):
+            store.vehicle_profile(body["profile_id"])
+        if body.get("team_id") and not any(t["id"] == body["team_id"] for t in store.teams()):
+            raise NotFound(f"team {body['team_id']} not found")
+        fuel = body.get("fuel_pct")
+        if fuel is not None:
+            try:
+                pct = float(fuel)
+            except (TypeError, ValueError):
+                raise ValueError("fuel_pct must be a number between 0 and 100")
+            if not 0 <= pct <= 100:
+                raise ValueError("fuel_pct must be between 0 and 100")
         row = store.create_vehicle(body)
-        emit(request, "config.updated", {"kind": "vehicle", "vehicle": row},
+        emit(request, "vehicle.updated", {"vehicle_id": row["id"], "vehicle": row},
              texts.master_data("kendaraan", "ditambah", row["name"]), account)
         return row
 
@@ -439,9 +456,22 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
             if target == "Standby":
                 data.setdefault("eta_minutes", None)
         row = store.update_vehicle(id, data)
-        emit(request, "config.updated", {"kind": "vehicle", "vehicle": row},
+        emit(request, "vehicle.updated", {"vehicle_id": row["id"], "vehicle": row},
              texts.master_data("kendaraan", "diubah", row["name"]), account)
         return row
+
+    @app.delete("/vehicles/{id}")
+    def remove_vehicle(request: Request, id: str) -> dict:
+        """Remove a vehicle from the database; a vehicle that is still dispatched is refused."""
+        actor = _account(request, role="operator")
+        busy = [a for a in store.assignments()
+                if a["vehicle_id"] == id and a["status"] in state_mod.ACTIVE_ASSIGNMENT]
+        if busy:
+            raise Busy(f"vehicle {id} masih ditugaskan di {busy[0]['incident_id']}")
+        row = store.delete_vehicle(id)
+        emit(request, "vehicle.updated", {"vehicle_id": id, "name": row["name"], "removed": True},
+             f"Kendaraan {row['name']} dihapus", actor)
+        return {"id": id, "name": row["name"], "removed": True}
 
     @app.get("/water-sources")
     def water_sources(request: Request, status: str = "all") -> list[dict]:
@@ -660,6 +690,24 @@ def create_app(store: Store, config: Config | None = None, hub: Any = None, sim:
         emit(request, "vehicle.water_level",
              {"vehicle_id": id, "level": state["level"], "source": state["source"], "confirmed_at": state["confirmed_at"]},
              texts.refill_done(config, row["name"]), account)
+        return row
+
+    @app.post("/vehicles/{id}/fuel")
+    def set_fuel(request: Request, id: str, body: dict = Body(...)) -> dict:
+        """Fuel gauge report (percent) by operator or officer; the simulator burns fuel
+        along driven distance and refills at the post after a mission."""
+        account = _account(request)
+        if "fuel_pct" not in body:
+            raise ValueError("fuel_pct is required")
+        try:
+            pct = float(body["fuel_pct"])
+        except (TypeError, ValueError):
+            raise ValueError("fuel_pct must be a number between 0 and 100")
+        if not 0 <= pct <= 100:
+            raise ValueError("fuel_pct must be between 0 and 100")
+        row = store.record_fuel(id, pct)
+        emit(request, "vehicle.fuel", {"vehicle_id": id, "fuel_pct": row["fuel_pct"]},
+             texts.vehicle_fuel(row["name"], row["fuel_pct"]), account)
         return row
 
     # ---- restrictions ----

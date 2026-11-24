@@ -114,6 +114,7 @@
         "status": {"type": "string"},
         "position": {"type": ["object", "null"]},
         "eta_minutes": {"type": ["number", "null"]},
+        "fuel_pct": {"type": "number", "minimum": 0, "maximum": 100},
         "water_level": {"type": "integer", "minimum": 0, "maximum": 4},
         "water_level_source": {"enum": ["operator", "officer", "estimate"]},
         "water_level_confirmed_at": {"type": ["string", "null"]},
@@ -235,6 +236,18 @@
       "payload": {"type": "object", "required": ["vehicle_id", "level", "source"], "properties": {"vehicle_id": {"type": "string"}, "level": {"type": "integer", "minimum": 0, "maximum": 4}, "source": {"enum": ["operator", "officer", "estimate"]}, "confirmed_at": {"type": ["string", "null"]}}, "additionalProperties": false}
     },
     {
+      "type": "vehicle.fuel",
+      "payload": {"type": "object", "required": ["vehicle_id", "fuel_pct"], "properties": {"vehicle_id": {"type": "string"}, "fuel_pct": {"type": "number", "minimum": 0, "maximum": 100}}, "additionalProperties": false}
+    },
+    {
+      "type": "vehicle.updated",
+      "payload": {"type": "object", "required": ["vehicle_id"], "properties": {"vehicle_id": {"type": "string"}, "name": {"type": ["string", "null"]}, "vehicle": {"$ref": "#/defs/vehicle"}, "removed": {"type": "boolean"}}, "additionalProperties": false}
+    },
+    {
+      "type": "team.updated",
+      "payload": {"type": "object", "required": ["team_id"], "properties": {"team_id": {"type": "string"}, "team": {"type": ["object", "null"]}, "removed": {"type": "boolean"}}, "additionalProperties": false}
+    },
+    {
       "type": "restriction.reported",
       "payload": {"type": "object", "required": ["restriction"], "properties": {"restriction": {"$ref": "#/defs/roadRestriction"}}, "additionalProperties": false}
     },
@@ -252,7 +265,7 @@
     },
     {
       "type": "member.updated",
-      "payload": {"type": "object", "required": ["member_id"], "properties": {"member_id": {"type": "string"}, "name": {"type": ["string", "null"]}, "removed": {"type": "boolean"}}, "additionalProperties": false}
+      "payload": {"type": "object", "required": ["member_id"], "properties": {"member_id": {"type": "string"}, "name": {"type": ["string", "null"]}, "member": {"$ref": "#/defs/member"}, "removed": {"type": "boolean"}}, "additionalProperties": false}
     },
     {
       "type": "config.updated",

@@ -67,7 +67,8 @@ let sel = { inc: null, m: new Set(), w: null, tab: 'inc' };
 let ui = { dmin: false };
 let pts = { ws: { name: '', type: 'hydrant', lat: '', lon: '', capacity: '', status: 'active' },
   r: { reason: 'flood', lat: '', lon: '' },
-  inc: { type: '', address: '', lat: '', lon: '' } };
+  inc: { type: '', address: '', lat: '', lon: '' },
+  veh: { name: '', plate: '', type: 'truck', team: '', fuel: 100 } };
 let reco = null, preview = null, previewTimer = null, vehTimer = null;
 let clockBase = { server: Date.now(), local: Date.now() };
 
@@ -134,11 +135,20 @@ function fold(ev) {
       paintMap(); render(); return;
     }
     case 'vehicle.water_level': { const v = veh(p.vehicle_id); if (v) { v.water_level = p.level; v.water_level_source = p.source; v.water_level_confirmed_at = p.confirmed_at; v.estimated = p.source === 'estimate'; } break; }
+    case 'vehicle.fuel': { const v = veh(p.vehicle_id); if (v) v.fuel_pct = p.fuel_pct; break; }
+    case 'vehicle.updated':
+      if (p.removed) { S.vehicles = S.vehicles.filter((x) => x.id !== p.vehicle_id); refreshVehicles(); }
+      else if (p.vehicle) upsert(S.vehicles, p.vehicle);
+      break;
+    case 'team.updated': if (p.team) upsert(S.teams, p.team); break;
     case 'restriction.reported': upsert(S.road_restrictions, p.restriction); break;
     case 'restriction.updated': upsert(S.road_restrictions, p.restriction); break;
     case 'waterSource.updated': if (p.removed) S.water_sources = S.water_sources.filter((w) => w.id !== p.water_source.id); else upsert(S.water_sources, p.water_source); break;
     case 'config.updated': setPath(cfg, p.key, p.value); break;
-    case 'member.updated': if (p.removed) { S.members = S.members.filter((m) => m.id !== p.member_id); refreshVehicles(); } break;
+    case 'member.updated':
+      if (p.removed) { S.members = S.members.filter((m) => m.id !== p.member_id); refreshVehicles(); }
+      else if (p.member) upsert(S.members, p.member);
+      break;
   }
   if (ev.type !== 'member.position') logLine(ev);
   render(); paintMap();
@@ -152,11 +162,14 @@ function logLine(ev) {
     'assignment.updated': () => `${p.incident_id} → ${p.vehicle_id ? veh(p.vehicle_id)?.name : 'tanpa kendaraan'}${p.water_source_id ? ' · air: ' + water(p.water_source_id)?.name : ''}`,
     'member.status': () => `${member(p.member_id)?.name ?? p.member_id}: ${lab('member_status', p.status)}`,
     'vehicle.water_level': () => `${veh(p.vehicle_id)?.name ?? p.vehicle_id} ${lvLabel(p.level)} (${p.source})`,
+    'vehicle.fuel': () => `${veh(p.vehicle_id)?.name ?? p.vehicle_id} bensin ${Math.round(p.fuel_pct)}%`,
+    'vehicle.updated': () => `kendaraan ${p.vehicle?.name ?? p.name ?? p.vehicle_id}${p.removed ? ' dihapus' : ''}`,
+    'team.updated': () => `regu ${p.team?.name ?? p.team_id} ditambah`,
     'restriction.reported': () => `${lab('restriction_reason', p.restriction.reason)} (menunggu verifikasi)`,
     'restriction.updated': () => `pembatasan ${p.restriction_id} → ${lab('restriction_status', p.status)}`,
     'config.updated': () => `konfigurasi ${p.key} = ${JSON.stringify(p.value)}`,
     'account.updated': () => `akun ${p.username}${p.removed ? ' dihapus' : p.role ? ` (${p.role})` : ''}`,
-    'member.updated': () => `anggota ${p.name ?? p.member_id}${p.removed ? ' dihapus' : ''}`,
+    'member.updated': () => `anggota ${p.member?.name ?? p.name ?? p.member_id}${p.removed ? ' dihapus' : ''}`,
   })[ev.type]?.() ?? ev.type;
   S.event_log.unshift({ ts: ev.ts, type: ev.type, text });
   if (S.event_log.length > 120) S.event_log.length = 120;
@@ -326,6 +339,8 @@ const kpis = () => {
   const liveG = S.members.filter((m) => m.freshness === 'live').length;
   const avgWater = Math.round(S.vehicles.reduce((s, v) => s + v.water_level, 0) / Math.max(1, (c('water_level.options')?.length ?? 5) - 1) * 100);
   const low = S.vehicles.filter((v) => v.water_level <= (c('water.low_level_threshold') ?? 1)).length;
+  const avgFuel = Math.round(S.vehicles.reduce((s, v) => s + v.fuel_pct, 0) / Math.max(1, S.vehicles.length));
+  const lowFuel = S.vehicles.filter((v) => v.fuel_pct <= (c('fuel.low_threshold_pct') ?? 20)).length;
   const items = [
     { l: 'Insiden aktif', v: st.incidents_active, s: `${st.incidents_finished} selesai`, k: 'var(--acc)' },
     { l: 'Unit siaga', v: `${standbyV}/${S.vehicles.length}`, s: `${S.vehicles.length - standbyV} bertugas`, k: 'var(--st-Standby)' },
@@ -335,14 +350,18 @@ const kpis = () => {
     { l: 'Isi ulang', v: st.refills, s: 'hari ini', k: 'var(--wat)' },
     { l: 'GPS live', v: `${liveG}/${S.members.length}`, s: `${S.members.length - liveG} basi/off`, k: liveG === S.members.length ? 'var(--st-Standby)' : 'var(--st-Dispatched)' },
     { l: 'Air rata²', v: avgWater + '%', s: `${low} rendah`, k: 'var(--wat)' },
+    { l: 'Bensin rata²', v: avgFuel + '%', s: `${lowFuel} rendah`, k: lowFuel ? 'var(--st-OnScene)' : '#fbbf24' },
   ];
   return items.map((k) => `<div class="kpi" style="--k:${k.k || 'var(--ink)'}"><b>${k.v}</b><small>${k.l} · ${k.s}</small></div>`).join('');
 };
+const fuelColor = (v) => v.fuel_pct <= (c('fuel.low_threshold_pct') ?? 20) ? 'var(--st-OnScene)' : '#fbbf24';
 const vehCard = (v) => `<div class="veh" style="--c:var(--st-${v.status});--vc:${teamColor(v.team_id)}">
   <div class="row"><b>${v.name}</b><small class="mono">${v.plate ?? ''}</small></div>
   <div class="ban">${lab('vehicle_status', v.status)}${v.eta_minutes != null ? ` · ETA ${Math.round(v.eta_minutes)} mnt` : ''}</div>
-  <div class="gauge" aria-label="Air ${lvLabel(v.water_level)}">${c('water_level.options').slice(1).map((_, i) => `<i class="${i < v.water_level ? 'f' : ''}"></i>`).join('')}</div>
+  <div class="row" style="align-items:center"><div class="gauge" style="flex:1" aria-label="Air ${lvLabel(v.water_level)}">${c('water_level.options').slice(1).map((_, i) => `<i class="${i < v.water_level ? 'f' : ''}"></i>`).join('')}</div>
+    <div class="tr" style="flex:1" aria-label="Bensin ${Math.round(v.fuel_pct)}%"><i style="width:${Math.max(0, Math.min(100, v.fuel_pct))}%;background:${fuelColor(v)}"></i></div></div>
   <div class="row"><small>Air ${lvLabel(v.water_level)} · ${v.estimated ? 'estimasi' : lab('water_level.reading_sources', v.water_level_source)} · ${v.water_level_confirmed_at ? age((serverNowMs() - Date.parse(v.water_level_confirmed_at)) / 1000) : 'belum ada bacaan'}</small><small class="mono">${fk(v.km_today)} km</small></div>
+  <div class="row"><small>Bensin ${Math.round(v.fuel_pct)}%${v.fuel_pct <= (c('fuel.low_threshold_pct') ?? 20) ? ' · rendah' : ''}</small></div>
 </div>`;
 const memCard = (m) => {
   const g = { live: ['●', '#34d399'], stale: ['◐', '#fbbf24'], offline: ['○', '#566274'] }[m.freshness];
@@ -405,6 +424,11 @@ const DOCK = [
     <div class="row">${geo('ws')}${in2('ws.capacity', 'kapasitas (opsional)')}</div>
     <div class="row"><select data-p="ws.status">${opts('water_source_status', pts.ws.status)}</select><button class="btn go" data-a="wsadd">Tambah titik</button></div>
     <small class="mono">${S.water_sources.map((w) => `${esc(w.id)} · ${esc(w.name)} · ${lab('water_source_types', w.type)} · ${(w.location?.lat ?? w.lat).toFixed(4)}, ${(w.location?.lon ?? w.lon).toFixed(4)} · ${lab('water_source_status', w.status)} <button class="ib" data-a="wdel" data-id="${w.id}" title="Hapus">✕</button>`).join('<br>')}</small></div>
+    <div class="box"><h4>Kendaraan (tambah / hapus)</h4>
+    <div class="row"><select data-p="veh.type">${opts('vehicle_types', pts.veh.type)}</select>${in2('veh.name', 'nama kendaraan (custom)')}</div>
+    <div class="row">${in2('veh.plate', 'plat (opsional)')}<select data-p="veh.team"><option value="">tanpa regu</option>${S.teams.map((t) => `<option value="${esc(t.id)}"${t.id === pts.veh.team ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select><input data-p="veh.fuel" type="number" min="0" max="100" placeholder="bensin %" value="${pts.veh.fuel}" style="width:90px"></div>
+    <div class="row"><button class="btn go" data-a="vadd">Tambah kendaraan</button></div>
+    <small class="mono">${S.vehicles.map((v) => `${esc(v.id)} · ${esc(v.name)} · ${lab('vehicle_types', v.vehicle_type)} · ${esc(v.plate ?? '—')} · bensin ${Math.round(v.fuel_pct)}% · ${lab('vehicle_status', v.status)} <button class="ib" data-a="vdel" data-id="${v.id}" title="Hapus">✕</button>`).join('<br>')}</small></div>
     <div class="box"><h4>Pembatasan jalan (titik)</h4>
     <div class="row"><select data-p="r.reason">${opts('restriction_reason', pts.r.reason)}</select></div>
     <div class="row">${geo('r')}<button class="btn" data-a="radd">Lapor</button></div>
@@ -422,6 +446,7 @@ const DOCK = [
     return `<div class="sg">
     <div class="box"><h4>Jarak per unit</h4>${S.vehicles.map((v) => bar(v.name, v.km_today, mx, teamColor(v.team_id), fk(v.km_today) + ' km')).join('')}</div>
     <div class="box"><h4>Air per unit</h4>${S.vehicles.map((v) => bar(v.name, v.water_level, (c('water_level.options')?.length ?? 5) - 1, 'var(--wat)', lvLabel(v.water_level))).join('')}</div>
+    <div class="box"><h4>Bensin per unit</h4>${S.vehicles.map((v) => bar(v.name, v.fuel_pct, 100, fuelColor(v), Math.round(v.fuel_pct) + '%')).join('')}</div>
     <div class="box"><h4>Status anggota</h4><div class="stk">${Object.entries(cnt).map(([s, n]) => `<i style="flex:${n};background:var(--st-${s})"></i>`).join('')}</div><div class="lg">${Object.entries(cnt).map(([s, n]) => chip('member_status', s, n)).join('')}</div></div>
     <div class="box"><h4>Siaga per regu</h4>${S.teams.map((t) => { const ms = S.members.filter((m) => m.team_id === t.id); const n = ms.filter((m) => m.status === 'Standby').length; return bar(t.name, n, ms.length, 'var(--st-Standby)', `${n}/${ms.length}`); }).join('')}</div>
     <div class="box"><h4>Insiden per jenis</h4>${Object.entries(typ).map(([t, n]) => bar(t, n, S.incidents.length, 'var(--acc)', n)).join('')}</div></div>`;
@@ -491,6 +516,28 @@ const ACT = {
   },
   wdel: async (id) => {
     try { await rest('DELETE', `/water-sources/${id}`); toast('Titik dihapus'); } catch (err) { toast(errText(err)); }
+    return 0;
+  },
+  vadd: async () => {
+    if (!pts.veh.name) { toast('Nama kendaraan wajib'); return 0; }
+    let profId = null;
+    try {
+      const ps = await rest('GET', '/vehicle-profiles');
+      profId = ps.find((p) => p.vehicle_type === pts.veh.type)?.id ?? null;
+    } catch { /* no routing profile for this type */ }
+    const f = Number(pts.veh.fuel);
+    try {
+      await rest('POST', '/vehicles', { name: pts.veh.name, plate: pts.veh.plate || null,
+        vehicle_type: pts.veh.type, team_id: pts.veh.team || null, profile_id: profId,
+        fuel_pct: Number.isFinite(f) ? Math.max(0, Math.min(100, f)) : 100 });
+      toast('Kendaraan ditambahkan');
+      pts.veh = { ...pts.veh, name: '', plate: '' };
+    } catch (err) { toast(errText(err)); }
+    return 0;
+  },
+  vdel: async (id) => {
+    try { await rest('DELETE', `/vehicles/${id}`); toast(`Kendaraan ${veh(id)?.name ?? id} dihapus`); }
+    catch (err) { toast(errText(err)); }
     return 0;
   },
   radd: async () => {

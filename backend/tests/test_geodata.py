@@ -82,4 +82,4 @@ def test_load_seed_stores_real_station():
         assert st["lat"] == cfg.get("geodata.station.lat")
         assert st["name"] == "Pos Damkar Tasikmalaya"
         assert counts["water_sources"] >= 1
-        assert counts["vehicles"] == 2
+        assert counts["vehicles"] == 4

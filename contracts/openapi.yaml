@@ -174,8 +174,9 @@ paths:
     get: {tags: [master], responses: {"200": {content: {application/json: {schema: {type: array, items: {"$ref": "#/components/schemas/Vehicle"}}}}}}}
     post:
       tags: [master]
+      summary: Add a vehicle to the database; name is custom (operator input), vehicle_type required
       requestBody: {required: true, content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}
-      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}}
+      responses: {"201": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}, "400": {"$ref": "#/components/responses/Error"}}
 
   /vehicles/{id}:
     get:
@@ -187,6 +188,15 @@ paths:
       parameters: [{name: id, in: path, required: true, schema: {type: string}}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, description: "any subset of Vehicle fields"}}}}
       responses: {"200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}}
+    delete:
+      tags: [master]
+      summary: Remove a vehicle from the database; members/assignments detach, water readings drop with it
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {content: {application/json: {schema: {type: object, properties: {id: {type: string}, name: {type: string}, removed: {type: boolean}}}}}}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
 
   /vehicles/{id}/water-level:
     post:
@@ -216,6 +226,25 @@ paths:
       responses:
         "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}
         "409": {"$ref": "#/components/responses/Error"}
+
+  /vehicles/{id}/fuel:
+    post:
+      tags: [master]
+      summary: Fuel gauge report (percent) by operator or officer
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fuel_pct]
+              properties:
+                fuel_pct: {type: number, minimum: 0, maximum: 100}
+      responses:
+        "200": {content: {application/json: {schema: {"$ref": "#/components/schemas/Vehicle"}}}}
+        "400": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
 
   /water-sources:
     get:
@@ -527,6 +556,7 @@ components:
         status: {type: string}
         position: {allOf: [{"$ref": "#/components/schemas/Position"}], description: "latest known position"}
         eta_minutes: {type: [number, "null"]}
+        fuel_pct: {type: number, minimum: 0, maximum: 100, description: "bensin gauge, percent"}
         water_level: {type: integer, minimum: 0, maximum: 4}
         water_level_source: {type: string, enum: [operator, officer, estimate]}
         water_level_confirmed_at: {type: [string, "null"]}

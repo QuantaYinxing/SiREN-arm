@@ -284,9 +284,12 @@ class Simulator:
             else:
                 pos = self._leg_pos(leg, rem / leg["minutes"] if leg["minutes"] else 0.0)
                 break
+        driven = geo.haversine_km(crew["pos"], pos)
         crew["pos"] = pos
         if asg["vehicle_id"]:
             self.store.update_vehicle(asg["vehicle_id"], {"lat": pos[0], "lon": pos[1]})
+            if driven > 0:
+                self._burn_fuel(asg["vehicle_id"], driven)
         self._ping_crew(asg, crew, pos, now)
         if frac >= 1.0:
             if crew["stage"] == "enroute":
@@ -297,6 +300,17 @@ class Simulator:
                 crew["drain"] = 0.0
             else:
                 self._finish(asg, crew)
+
+    def _burn_fuel(self, vehicle_id: str, km: float) -> None:
+        """Odometer burn at game.fuel_per_km for the vehicle type; emits vehicle.fuel only
+        when the gauge moves by a whole percent, so the UI follows the trip."""
+        veh = self.store.vehicle(vehicle_id)
+        rate = float(self.store.config.get(f"game.fuel_per_km.{veh['vehicle_type']}", 0.3))
+        new = max(0.0, veh["fuel_pct"] - km * rate)
+        if round(new) != round(veh["fuel_pct"]):
+            row = self.store.record_fuel(vehicle_id, new)
+            self._emit("vehicle.fuel", {"vehicle_id": vehicle_id, "fuel_pct": row["fuel_pct"]},
+                       texts.vehicle_fuel(row["name"], row["fuel_pct"]))
 
     def _ping_crew(self, asg: dict, crew: dict, pos: tuple[float, float], now: float) -> None:
         """Crew pings drive freshness and the vehicle odometer (km_today sums pings)."""
@@ -374,6 +388,11 @@ class Simulator:
         if asg["vehicle_id"]:
             state_mod.recompute_vehicle(self.store.config, self.store, asg["vehicle_id"])
             self.store.update_vehicle(asg["vehicle_id"], {"eta_minutes": None})
+            veh = self.store.vehicle(asg["vehicle_id"])
+            if veh["fuel_pct"] < 100:
+                row = self.store.record_fuel(asg["vehicle_id"], 100)
+                self._emit("vehicle.fuel", {"vehicle_id": asg["vehicle_id"], "fuel_pct": 100.0},
+                           texts.fuel_refilled(row["name"]))
         crew["stage"] = "done"
 
     def _reports(self, cfg: Any, now: float) -> None:
