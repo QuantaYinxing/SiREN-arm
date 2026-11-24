@@ -9,7 +9,29 @@ set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root, wherever the script is invoked from
 
 OUT=".sandbox/data/tiles/siren.pmtiles"
-mkdir -p .sandbox/data/tiles
+mkdir -p .sandbox/data/tiles .sandbox/bin
+
+# go-pmtiles binary is not committed (.sandbox is sandboxed); fetch the release
+# asset for the local arch (x86_64/aarch64) if absent. Asset names carry the
+# version: go-pmtiles_<ver>_Linux_<arch>.tar.gz.
+if [ ! -x .sandbox/bin/pmtiles ]; then
+  echo "→ download pmtiles ke .sandbox/bin ..."
+  .sandbox/py/bin/python - <<'PYEOF'
+import json, os, platform, tarfile, urllib.request
+arch = {"x86_64": "Linux_x86_64", "aarch64": "Linux_arm64"}[platform.machine()]
+rel = json.load(urllib.request.urlopen("https://api.github.com/repos/protomaps/go-pmtiles/releases/latest"))
+url = next(a["browser_download_url"] for a in rel["assets"]
+           if a["name"] == f"go-pmtiles_{rel['tag_name'][1:]}_{arch}.tar.gz")
+tmp = ".sandbox/bin/pmtiles.tgz"
+urllib.request.urlretrieve(url, tmp)
+with tarfile.open(tmp) as t:
+    m = next(m for m in t.getmembers() if os.path.basename(m.name) == "pmtiles")
+    with t.extractfile(m) as src, open(".sandbox/bin/pmtiles", "wb") as dst:
+        dst.write(src.read())
+os.chmod(".sandbox/bin/pmtiles", 0o755)
+os.remove(tmp)
+PYEOF
+fi
 
 # Coverage bbox from contracts/config.yaml (min_lon,min_lat,max_lon,max_lat —
 # pmtiles extract wants lon,lat order).

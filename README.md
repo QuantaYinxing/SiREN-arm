@@ -47,6 +47,29 @@ edge makes phone geolocation work without any certificates. Valhalla (real routi
 started if available; without it the backend falls back to straight-line estimates.
 `Ctrl+C` stops server, tunnel and Valhalla; the launcher refuses a busy port.
 
+## ARM (aarch64) — this fork's target
+
+Everything above works unchanged on a Raspberry Pi-class machine: the backend is pure
+Python, the frontend JS is vendored, and `cloudflared` / `pmtiles` download per-arch
+automatically (`setup.sh`, `scripts/tiles_build.sh`). The routing engine is the only
+binary you must build yourself — the author's x86 `.sandbox/bin` binaries are not
+committed and cannot run on arm64:
+
+```bash
+sudo apt install g++ cmake libprotobuf-dev protobuf-compiler libspatialite-dev \
+  libsqlite3-dev libcurl4-openssl-dev libzmq3-dev libczmq-dev libboost-dev \
+  libgeotiff-dev liblz4-dev libluajit-5.1-dev libgeos-dev libssl-dev \
+  libexpat1-dev libreadosm-dev zlib1g-dev git
+./scripts/valhalla_compile.sh   # Valhalla + prime_server + spatialite tools -> .sandbox/bin
+./scripts/valhalla_build.sh     # bbox routing tiles -> .sandbox/data/valhalla/valhalla_tiles.tar
+```
+
+Ubuntu 26.10 ships protobuf 3.21.12 — the version Valhalla 3.9.3 pins — so no
+`.sandbox/deps-pb` rebuild is needed (that was the author's x86 Ubuntu 24.04 workaround
+for protobuf 36 SIGSEGVs). Routing tiles need `.sandbox/bin/osm_bbox` first: compile it
+per the header in `scripts/osm_crop.cpp` (libosmium/protozero headers vendored from the
+PyPI `osmium` sdist into `.sandbox/include`). Heavy builds: free RAM, `nice`, capped `-j`.
+
 ## One repo, one database per device
 
 Each deployment keeps its own SQLite at `.sandbox/data/siren.sqlite` (never committed).
@@ -55,9 +78,12 @@ can run 5 — logins always match the database they live in. The GUI manages it:
 
 ![Database manager](assets/screenshots/database.png)
 
-Create and remove login accounts (role, password, optional link to a crew member) and
-add or remove crew members. Deleting a member who is currently dispatched is refused;
-passwords are stored hashed and never returned by the API. Everything is operator-only.
+Create and remove login accounts (role, password, optional link to a crew member), add
+or remove crew members, and add or remove vehicles — the vehicle name is typed freely
+(plat optional, type truck / motorbike / patrol car). Deleting a member or a vehicle
+that is currently dispatched is refused; passwords are stored hashed and never returned
+by the API. Everything is operator-only. Vehicle cards on `/ops` follow the database
+live (add/remove shows up immediately), each card carrying both gauges: air and bensin.
 
 ## Architecture
 

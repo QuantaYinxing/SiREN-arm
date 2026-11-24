@@ -40,9 +40,11 @@ if [ "$MODE" != "database" ]; then
   if ss -tlnp 2>/dev/null | grep -qE ":8081\s"; then
     echo "→ valhalla :8081 sudah jalan — pakai yang ada"
   else
-    # .sandbox/bin/valhalla_service.pb321 is built against protobuf 3.21.12 (the version
-    # Valhalla 3.9.3 pins upstream); the plain binary crashes on repeat requests under
-    # protobuf 36 (docs/blackbox.md 2026-11-23). Fallback keeps the old binary working.
+    # .sandbox/bin/valhalla_service.pb321 is the author's x86 build against protobuf
+    # 3.21.12 (the version Valhalla 3.9.3 pins upstream); the plain binary crashes on
+    # repeat requests under protobuf 36 (docs/blackbox.md 2026-11-23). On arm64
+    # (scripts/valhalla_compile.sh) Ubuntu ships protobuf 3.21.12 itself, so the plain
+    # binary is stable and the fallback order below covers both machines.
     VH=".sandbox/bin/valhalla_service.pb321"
     [ -x "$VH" ] || VH=".sandbox/bin/valhalla_service"
     LD_LIBRARY_PATH="$PWD/.sandbox/lib" nice -n 5 "$VH" \
@@ -67,8 +69,13 @@ if [ "$MODE" = "realmode" ]; then
   CF=".sandbox/bin/cloudflared"
   if [ ! -x "$CF" ]; then
     echo "→ download cloudflared ke .sandbox/bin ..."
+    case "$(uname -m)" in
+      x86_64) CFARCH="linux-amd64" ;;
+      aarch64) CFARCH="linux-arm64" ;;
+      *) echo "arch $(uname -m) tidak punya build cloudflared" >&2; exit 1 ;;
+    esac
     curl -L --fail -o "$CF.part" \
-      https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-$CFARCH"
     mv "$CF.part" "$CF"
     chmod +x "$CF"
   fi
@@ -90,13 +97,13 @@ fi
 if [ "$MODE" = "database" ]; then
   echo "Database : $URL/db/  (login akun operator)"
   if [ "$OPEN" = 1 ]; then
-    .sandbox/bin/xdg-open "$URL/db/" >/dev/null 2>&1 || echo "(browser tidak otomatis terbuka — buka URL di atas)"
+    command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL/db/" >/dev/null 2>&1 || echo "(browser tidak otomatis terbuka — buka URL di atas)"
   fi
 else
   echo "Operator   : $URL/ops/"
   echo "Petugas    : $URL/field/"
   if [ "$OPEN" = 1 ]; then
-    .sandbox/bin/xdg-open "$URL/ops/" >/dev/null 2>&1 || echo "(browser tidak otomatis terbuka — buka URL di atas)"
+    command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL/ops/" >/dev/null 2>&1 || echo "(browser tidak otomatis terbuka — buka URL di atas)"
   fi
 fi
 echo "Ctrl+C untuk berhenti."

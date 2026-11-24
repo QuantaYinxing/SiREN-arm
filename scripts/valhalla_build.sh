@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # Build Valhalla routing tiles from the bbox crop (scripts/osm_crop.py; bbox comes
-# from contracts/config.yaml geodata). Valhalla is already compiled by Candra into
-# .sandbox/bin (commit ac46322637801a3ea7735cf1ba63f7928a9314c4); prime_server's lib
-# lives in .sandbox/lib, so LD_LIBRARY_PATH must be exported before running them.
+# from contracts/config.yaml geodata). The binaries come from .sandbox/bin - build
+# them for the local arch with scripts/valhalla_compile.sh (the author's x86 builds
+# were never committed; nothing runs on a fresh clone until you compile). prime_server's
+# lib lives in .sandbox/lib, so LD_LIBRARY_PATH must be exported before running them.
 # Everything stays inside .sandbox/ (docs/rules.md §sandboxing); generated data is
 # never committed.
 #
-# Service binary note: the .sandbox/bin/valhalla_service build links system protobuf
-# 36 and SIGSEGVs on repeat /route requests (Valhalla 3.9.3 is not compatible with
-# protobuf 36). The stable binary is .sandbox/bin/valhalla_service.pb321, rebuilt from
-# the same source with protobuf 3.21.12 (upstream's Ubuntu 24.04 pin) installed into
-# .sandbox/deps-pb and passed via -DCMAKE_PREFIX_PATH plus -DCMAKE_CXX_FLAGS
-# "-I$PWD/.sandbox/deps-pb/include"; setup.sh prefers it. Details: docs/blackbox.md
-# 2026-11-23.
+# Service binary note: on the author's x86 laptop the system protobuf 36 SIGSEGVs
+# Valhalla 3.9.3 on repeat /route requests, so .sandbox/bin/valhalla_service.pb321
+# (protobuf 3.21.12 via .sandbox/deps-pb) was rebuilt there. On arm64 (Ubuntu 26.10)
+# the system protobuf IS 3.21.12, so the plain binary compiled by valhalla_compile.sh
+# is stable and no pb321 exists. setup.sh prefers pb321 and falls back to plain.
+# Details: docs/blackbox.md 2026-11-23.
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root, wherever the script is invoked from
 
 BIN=".sandbox/bin"
 export LD_LIBRARY_PATH="$PWD/.sandbox/lib"
+# build_admins/build_timezones invoke 'spatialite_tool' via the shell (Ubuntu 26.10
+# ships no spatialite-tools; valhalla_compile.sh builds it into .sandbox/bin).
+export PATH="$PWD/.sandbox/bin:$PATH"
 CROP=".sandbox/data/osm/siren-bbox.osm.pbf"
 TILES_DIR=".sandbox/data/valhalla"
 CONFIG=".sandbox/data/valhalla/valhalla.json"

@@ -1,12 +1,13 @@
 // Single-tool bbox crop of a Geofabrik .osm.pbf using libosmium (headers are
-// vendored in .sandbox/include from the pyosmium 4.3.2 sdist; zlib from the
-// system). Same semantics as the old pyosmium crop: keep ways that touch the
-// bbox (any node inside), relations whose member ways/refs are kept, and all
-// nodes referenced by kept objects plus nodes inside the bbox - so the output
-// is self-consistent for Valhalla and protomaps. Four streaming C++ passes,
-// far faster than Python callbacks over a 1.7 GB extract.
+// vendored in .sandbox/include from the PyPI `osmium` 4.3.2 sdist — the pyosmium
+// package name on PyPI is `osmium`; headers live at contrib/libosmium/include and
+// contrib/protozero/include — zlib from the system). Same semantics as the old
+// pyosmium crop: keep ways that touch the bbox (any node inside), relations whose
+// member ways/refs are kept, and all nodes referenced by kept objects plus nodes
+// inside the bbox - so the output is self-consistent for Valhalla and protomaps.
+// Four streaming C++ passes, far faster than Python callbacks over a 1.7 GB extract.
 //
-// Compile (once):
+// Compile (once, works on x86_64 and aarch64 with apt g++):
 //   g++ -O2 -std=c++20 -DHAVE_PROTOZERO -DHAVE_ZLIB \
 //     -I .sandbox/include/libosmium -I .sandbox/include/protozero \
 //     scripts/osm_crop.cpp -o .sandbox/bin/osm_bbox -lz
