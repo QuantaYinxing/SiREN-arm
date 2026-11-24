@@ -50,6 +50,7 @@
 <script type="module">
 import { login, loadSession, ensureSession, rest, connectWS, errText } from '/shared/api.js';
 import { createMap, mapData, applyMap } from '/shared/map.js';
+globalThis.__perf = { events: 0, paints: 0, renders: 0, routeFetches: 0, waterFetches: 0 }; // dev hook: perf counters (docs/blackbox.md session D)
 
 // UI palette per canonical enum value (colors are UI-only; labels come from config).
 const STC = {
@@ -119,6 +120,7 @@ function applySnapshot(p) {
 }
 
 function fold(ev) {
+  globalThis.__perf.events++;
   const p = ev.payload || {};
   if (ev.type === 'snapshot') { applySnapshot(p); return; }
   if (!S) return;
@@ -220,7 +222,7 @@ function prev() {
 async function refreshReco() {
   const P = prev();
   if (!P || !P.veh) { reco = null; schedulePreview(); render(); return; }
-  try { reco = await rest('POST', '/routing/water-source-options', { vehicle_id: P.veh.id, incident_id: P.inc.id }); }
+  try { globalThis.__perf.waterFetches++; reco = await rest('POST', '/routing/water-source-options', { vehicle_id: P.veh.id, incident_id: P.inc.id }); }
   catch (err) { toast(errText(err)); reco = null; }
   schedulePreview(); render();
 }
@@ -354,12 +356,14 @@ async function fetchCrewRoutes() {
     const spec = crewRouteSpec(a);
     if (!spec) continue;
     crewPending.add(k);
+    globalThis.__perf.routeFetches++;
     rest('POST', '/routing/route', { vehicle_id: a.vehicle_id, to: spec.to, via_water_source_id: spec.via })
       .then((r) => { crewPending.delete(k); crewRoutes.set(k, r); paintMap(); })
       .catch(() => { crewPending.delete(k); });
   }
 }
 function paintMap() {
+  globalThis.__perf.paints++;
   if (!map || !S) return;
   fetchCrewRoutes();
   const route = { legs: [] };
@@ -506,6 +510,7 @@ const DOCK = [
   { k: 'log', l: 'Log kejadian', r: () => S.event_log.map((l) => rowHTML('76px 170px 1fr', `<small class="mono">${hhmm(l.ts)}</small><span class="mono" style="color:var(--wat)">${l.type}</span><span>${l.text}</span>`)).join('') },
 ];
 function render() {
+  globalThis.__perf.renders++;
   if (!S) return;
   const game = gameMode;
   $('#speed').innerHTML = (game || mockOn)
