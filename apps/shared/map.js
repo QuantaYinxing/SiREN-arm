@@ -148,7 +148,8 @@ export async function createMap(container, { bounds } = {}) {
       circleLayer('incident-dot', 'incidents', 12, 3),
     ],
   };
-  const map = new maplibregl.Map({ container, style, attributionControl: false });
+  const map = new maplibregl.Map({ container, style, attributionControl: false,
+    pixelRatio: Math.min(1.25, window.devicePixelRatio || 1), antialias: false, fadeDuration: 0 });
   // Camera without waiting for 'load' (headless browsers may never fire it): approximate fit.
   try {
     const [sw, ne] = bounds;
@@ -208,8 +209,20 @@ export function mapData(state, ui = {}) {
 }
 
 export function applyMap(map, data) {
-  for (const [name, fc] of Object.entries(data)) map.getSource(name)?.setData(fc);
+  // Pi perf: re-serialising + setData on every source per event re-indexes GeoJSON.
+  // Skip sources whose payload is identical to the last applied one; repaint only
+  // when something actually changed.
+  let changed = false;
+  for (const [name, fc] of Object.entries(data)) {
+    const json = JSON.stringify(fc);
+    if (applyMap._last?.get(name) === json) continue;
+    applyMap._last.set(name, json);
+    map.getSource(name)?.setData(fc);
+    changed = true;
+  }
+  if (!changed) return;
   map.triggerRepaint();
   // Headless browsers may not run the rAF loop; draw immediately.
   try { map.render(); } catch { /* render loop takes over in real browsers */ }
 }
+applyMap._last = new Map();
