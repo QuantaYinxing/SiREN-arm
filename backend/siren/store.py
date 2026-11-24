@@ -257,6 +257,12 @@ class Store:
         self._lock = threading.RLock()
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # Pi perf: DELETE-mode journal fsyncs every commit; at game speeds the sim
+        # commits tens of writes per second and kernel writeback dominates CPU.
+        # WAL + synchronous=NORMAL keeps commits in-process (durability stays
+        # crash-safe via WAL replay; fsync only at checkpoint).
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA synchronous = NORMAL")
         self.event_buffer_limit = event_buffer_limit
         self.event_buffer: list[dict[str, Any]] = []
         self.last_event_id: str | None = None
