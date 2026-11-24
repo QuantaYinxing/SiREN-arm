@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # SiREN dev launcher (docs/rules.md: semua instalasi & data tetap di .sandbox/).
+#   ./setup.sh -init             first-time install (venv, Valhalla compile, tiles,
+#                                  basemap, cloudflared) — idempotent, x86_64 + arm64,
+#                                  --dry-run prints the plan (scripts/init.sh)
 #   ./setup.sh gamemode          server game mode di localhost + buka browser (dev test)
 #   ./setup.sh realmode          server real mode + Cloudflare tunnel publik + buka browser
 #                                  (HP teman: <url>/field/)
@@ -11,7 +14,10 @@
 # Ctrl+C menghentikan server, tunnel, dan valhalla.
 set -euo pipefail
 cd "$(dirname "$0")"
-MODE="${1:?usage: ./setup.sh gamemode|realmode|database [--no-browser]}"
+case "${1:-}" in
+  -init|--initialize) exec scripts/init.sh "${@:2}" ;;
+esac
+MODE="${1:?usage: ./setup.sh -init | gamemode|realmode|database [--no-browser|--fresh]}"
 case "$MODE" in
   gamemode)  SRV="game" ;;
   realmode)  SRV="real" ;;
@@ -20,6 +26,7 @@ case "$MODE" in
 esac
 PORT="${PORT:-8094}"
 PY=".sandbox/py/bin/python"
+if [ ! -x "$PY" ]; then echo "belum di-init — jalankan ./setup.sh -init dulu" >&2; exit 1; fi
 OPEN=1
 FRESH=0
 for arg in "$@"; do
@@ -95,18 +102,7 @@ if [ "$ready" = 0 ]; then echo "server tidak siap:"; tail -5 /tmp/siren-server.l
 URL="http://localhost:$PORT"
 if [ "$MODE" = "realmode" ]; then
   CF=".sandbox/bin/cloudflared"
-  if [ ! -x "$CF" ]; then
-    echo "→ download cloudflared ke .sandbox/bin ..."
-    case "$(uname -m)" in
-      x86_64) CFARCH="linux-amd64" ;;
-      aarch64) CFARCH="linux-arm64" ;;
-      *) echo "arch $(uname -m) tidak punya build cloudflared" >&2; exit 1 ;;
-    esac
-    curl -L --fail -o "$CF.part" \
-      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-$CFARCH"
-    mv "$CF.part" "$CF"
-    chmod +x "$CF"
-  fi
+  if [ ! -x "$CF" ]; then echo "cloudflared belum ada — jalankan ./setup.sh -init dulu" >&2; exit 1; fi
   "$CF" tunnel --url "$URL" >/tmp/siren-tunnel.log 2>&1 &
   TUNNEL_PID=$!
   echo "→ menunggu URL cloudflare ..."

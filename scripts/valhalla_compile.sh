@@ -86,5 +86,38 @@ cp "$SRC/build/valhalla_service" "$SRC/build/valhalla_build_config" \
 cp -a "$PWD/.sandbox/deps-prime/lib/"*.so* .sandbox/lib/ 2>/dev/null || true
 find "$SRC/build" -maxdepth 1 -name "*.so*" -exec cp -a {} .sandbox/lib/ \;
 
+# protobuf pin: Valhalla 3.9.3 SIGSEGVs on repeat /route requests when linked
+# against newer protobuf (the author's x86 Ubuntu 24.04 ships 36). Ubuntu 26.10
+# arm64 ships protobuf 3.21.12 itself, so the plain build above is stable and no
+# deps-pb exists. On any other system protobuf, build 3.21.12 into .sandbox/deps-pb
+# and a second service binary .sandbox/bin/valhalla_service.pb321 (setup.sh and
+# valhalla_keep.sh prefer pb321 when present - docs/blackbox.md 2026-11-23).
+PB_VER="$(pkg-config --modversion protobuf 2>/dev/null || echo none)"
+if [ "$PB_VER" != "3.21.12" ]; then
+  echo "→ system protobuf $PB_VER: build protobuf 3.21.12 -> .sandbox/deps-pb + pb321 ..."
+  mkdir -p .sandbox/deps-pb
+  if [ ! -d .sandbox/src/protobuf-3.21.12 ]; then
+    curl -sL --fail -o .sandbox/src/protobuf-cpp-3.21.12.tar.gz \
+      https://github.com/protocolbuffers/protobuf/releases/download/v3.21.12/protobuf-cpp-3.21.12.tar.gz
+    tar -xzf .sandbox/src/protobuf-cpp-3.21.12.tar.gz -C .sandbox/src
+  fi
+  cmake -S .sandbox/src/protobuf-3.21.12 -B .sandbox/src/protobuf-3.21.12/build \
+    -DCMAKE_BUILD_TYPE=Release -Dprotobuf_BUILD_TESTS=OFF \
+    -DCMAKE_INSTALL_PREFIX="$PWD/.sandbox/deps-pb" >/dev/null
+  nice -n 10 cmake --build .sandbox/src/protobuf-3.21.12/build -j "$THREADS"
+  cmake --install .sandbox/src/protobuf-3.21.12/build
+  PB_PREFIX="$PWD/.sandbox/deps-prime;$PWD/.sandbox/deps-pb"
+  export PKG_CONFIG_PATH="$PWD/.sandbox/deps-pb/lib/pkgconfig:$PWD/.sandbox/deps-pb/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
+  cmake -S "$SRC" -B "$SRC/build-pb321" -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTS=OFF -DENABLE_TESTS=OFF -DINSTALL_TEST_LIB=OFF \
+    -DVALHALLA_STATIC=OFF \
+    -DENABLE_PYTHON_BINDINGS=OFF -DENABLE_NODE_BINDINGS=OFF \
+    -DCMAKE_PREFIX_PATH="$PB_PREFIX" >/dev/null
+  nice -n 10 cmake --build "$SRC/build-pb321" -j "$THREADS"
+  cp "$SRC/build-pb321/valhalla_service" .sandbox/bin/valhalla_service.pb321
+  cp -a "$PWD/.sandbox/deps-pb/lib/"*.so* .sandbox/lib/ 2>/dev/null || true
+  find "$SRC/build-pb321" -maxdepth 1 -name "*.so*" -exec cp -a {} .sandbox/lib/ \;
+fi
+
 echo "Done. Serve: LD_LIBRARY_PATH=$PWD/.sandbox/lib .sandbox/bin/valhalla_service .sandbox/data/valhalla/valhalla.json 1"
 echo "Next: ./scripts/valhalla_build.sh (needs .sandbox/bin/osm_bbox - compile per scripts/osm_crop.cpp header)"

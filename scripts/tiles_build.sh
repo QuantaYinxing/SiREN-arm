@@ -18,7 +18,7 @@ if [ ! -x .sandbox/bin/pmtiles ]; then
   echo "→ download pmtiles ke .sandbox/bin ..."
   .sandbox/py/bin/python - <<'PYEOF'
 import json, os, platform, tarfile, urllib.request
-arch = {"x86_64": "Linux_x86_64", "aarch64": "Linux_arm64"}[platform.machine()]
+arch = {"x86_64": "Linux_x86_64", "aarch64": "Linux_arm64"}[os.environ.get("SIREN_ARCH", platform.machine())]
 rel = json.load(urllib.request.urlopen("https://api.github.com/repos/protomaps/go-pmtiles/releases/latest"))
 url = next(a["browser_download_url"] for a in rel["assets"]
            if a["name"] == f"go-pmtiles_{rel['tag_name'][1:]}_{arch}.tar.gz")

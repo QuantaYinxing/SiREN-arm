@@ -26,11 +26,12 @@ status transitions — all driven by the same WebSocket hub the operator uses.
 ## Run it
 
 No Docker needed; everything installs inside `.sandbox/` (repo rule — nothing global).
+One command sets up a fresh clone — idempotent, same flow on x86_64 and arm64:
 
 ```bash
-uv venv .sandbox/py
-uv pip install --python .sandbox/py/bin/python -e backend          # runtime deps
-uv pip install --python .sandbox/py/bin/python -e "backend[dev]"   # + pytest
+./setup.sh -init   # venv + backend deps, Valhalla compile, routing tiles,
+                   # PMTiles basemap, cloudflared, then a pytest smoke
+                   # --dry-run prints the plan; --skip-osm skips the 1.7 GB extract
 ```
 
 One launcher, three modes:
@@ -45,34 +46,36 @@ One launcher, three modes:
 resets the operational day (incidents/assignments/log cleared, crew back to Standby —
 accounts and vehicles survive). gamemode always starts from a wiped scratch DB.
 
-`realmode` downloads `cloudflared` once into `.sandbox/bin/` and prints a public HTTPS URL:
+`realmode` uses the `cloudflared` binary `-init` placed in `.sandbox/bin/` and prints a
+public HTTPS URL:
 open it yourself as operator, hand the `/field/` URL to your crew — HTTPS at the tunnel
 edge makes phone geolocation work without any certificates. Valhalla (real routing) is
 started if available; without it the backend falls back to straight-line estimates.
 `Ctrl+C` stops server, tunnel and Valhalla; the launcher refuses a busy port.
 
-## ARM (aarch64) — this fork's target
+## x86_64 and arm64 — one installer, both arches
 
-Everything above works unchanged on a Raspberry Pi-class machine: the backend is pure
-Python, the frontend JS is vendored, and `cloudflared` / `pmtiles` download per-arch
-automatically (`setup.sh`, `scripts/tiles_build.sh`). The routing engine is the only
-binary you must build yourself — the author's x86 `.sandbox/bin` binaries are not
-committed and cannot run on arm64:
+`-init` runs the same steps everywhere: `cloudflared` and `pmtiles` download per-arch,
+while Valhalla + prime_server + spatialite tools + `osm_bbox` compile locally for the
+machine's arch (`scripts/valhalla_compile.sh`; libosmium/protozero headers vendored from
+the PyPI `osmium` sdist into `.sandbox/include`). `-init` reports missing apt packages
+and never runs sudo — install them first:
 
 ```bash
 sudo apt install g++ cmake libprotobuf-dev protobuf-compiler libspatialite-dev \
   libsqlite3-dev libcurl4-openssl-dev libzmq3-dev libczmq-dev libboost-dev \
   libgeotiff-dev liblz4-dev libluajit-5.1-dev libgeos-dev libssl-dev \
   libexpat1-dev libreadosm-dev zlib1g-dev git
-./scripts/valhalla_compile.sh   # Valhalla + prime_server + spatialite tools -> .sandbox/bin
-./scripts/valhalla_build.sh     # bbox routing tiles -> .sandbox/data/valhalla/valhalla_tiles.tar
 ```
 
-Ubuntu 26.10 ships protobuf 3.21.12 — the version Valhalla 3.9.3 pins — so no
-`.sandbox/deps-pb` rebuild is needed (that was the author's x86 Ubuntu 24.04 workaround
-for protobuf 36 SIGSEGVs). Routing tiles need `.sandbox/bin/osm_bbox` first: compile it
-per the header in `scripts/osm_crop.cpp` (libosmium/protozero headers vendored from the
-PyPI `osmium` sdist into `.sandbox/include`). Heavy builds: free RAM, `nice`, capped `-j`.
+The only arch difference is protobuf: Valhalla 3.9.3 SIGSEGVs on repeat `/route`
+requests when linked against newer protobuf (Ubuntu 24.04 x86 ships 36; Ubuntu 26.10
+arm64 ships 3.21.12, the version Valhalla pins). `valhalla_compile.sh` detects the
+system version — on anything other than 3.21.12 it builds protobuf 3.21.12 into
+`.sandbox/deps-pb` and a `valhalla_service.pb321` variant, which `setup.sh` and
+`valhalla_keep.sh` prefer when present. Heavy builds: free RAM, `nice`, capped `-j`
+(`THREADS` env). Routing tiles need `.sandbox/bin/osm_bbox` first — `-init` compiles it
+(headers auto-vendored); the bbox crop comes from `contracts/config.yaml` geodata.
 
 ## One repo, one database per device
 
@@ -113,7 +116,7 @@ live (add/remove shows up immediately), each card carrying both gauges: air and 
 | `backend/tests/` | 112 tests — API contract, state machine, water ranking, routing, store, daily reset |
 | `seed/` | starter data (HQ station, teams, accounts, vehicles, water sources from OSM) |
 | `apps/` | `ops/`, `field/`, `db/`, shared client + styles, vendored MapLibre, basemap data |
-| `scripts/` | OSM crop, tile build, Valhalla graph build + keep loop, water seed |
+| `scripts/` | one-shot installer (`init.sh`), OSM crop, tile build, Valhalla graph build + keep loop, water seed |
 | `infra/` | docker-compose for the future VPS deployment (PostGIS, Valhalla, tile server) |
 | `.sandbox/` | installs and generated data — never committed |
 
